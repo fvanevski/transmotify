@@ -1,0 +1,17 @@
+{
+	"folders": [
+		{
+			"path": "."
+		}
+	],
+	"settings": {
+		"terminal.integrated.gpuAcceleration": "off",
+		"roo-cline.vsCodeLmModelSelector": {},
+		"files.associations": {
+			"chrono": "cpp",
+			"system_error": "cpp",
+			"typeindex": "cpp",
+			"xlocale": "cpp"
+		}
+	}
+}
