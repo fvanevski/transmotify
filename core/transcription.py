@@ -1,4 +1,5 @@
 # core/transcription.py
+
 import json
 import re
 from pathlib import Path
@@ -9,8 +10,7 @@ import yt_dlp  # noqa: F401
 from .logging import log_info, log_warning, log_error
 
 # Ensure safe_run accepts output_callback
-from .utils import safe_run
-
+from .utils import safe_run, parse_xlsx_snippets  # Also import parse_xlsx_snippets
 
 Segment = Dict[str, Any]
 SegmentsList = List[Segment]
@@ -180,9 +180,13 @@ class Transcription:
         self, youtube_url: str, temp_dir: str, log_file_handle: TextIO, session_id: str
     ) -> str:
         temp_dir_path = Path(temp_dir)
-        basename: str = "audio_input"
-        webm_path: Path = temp_dir_path / f"{basename}_{session_id}.webm"
-        wav_path: Path = temp_dir_path / f"{basename}_{session_id}.wav"
+        # Use item_identifier in filename for clarity in batch processing
+        # The calling process_batch_xlsx should handle unique naming if needed.
+        # For now, assuming temp_dir is unique per item or session_id is sufficient.
+        # Let's make filename directly from session_id/item_identifier
+        basename: str = f"audio_input_{session_id}"
+        webm_path: Path = temp_dir_path / f"{basename}.webm"
+        wav_path: Path = temp_dir_path / f"{basename}.wav"
         webm_path_str: str = str(webm_path)
         wav_path_str: str = str(wav_path)
 
@@ -235,25 +239,42 @@ class Transcription:
                     except Exception:
                         print(warn_msg)
 
-    # --- run_whisperx now uses its wrapper ---
+    # --- run_whisperx now accepts a list of audio paths ---
     def run_whisperx(
-        self, audio_path: str, output_dir: str, log_file_handle: TextIO, session_id: str
+        self,
+        audio_paths: List[str],
+        output_dir: str,
+        log_file_handle: TextIO,
+        session_id: str,
     ) -> None:
-        command: List[str] = [
-            "whisperx",
-            audio_path,
-            "--model",
-            self.config.get("whisper_model_size", "large-v2"),
-            "--diarize",
-            "--hf_token",
-            self.hf_token or "",
-            "--output_dir",
-            output_dir,
-            "--output_format",
-            self.config.get("whisper_output_format", "json"),
-            "--device",
-            self.device,
-        ]
+        """
+        Runs WhisperX on a list of audio files in a single batch.
+        """
+        if not audio_paths:
+            log_warning(f"[{session_id}] No audio paths provided to run_whisperx.")
+            return
+
+        command: List[str] = (
+            [
+                "whisperx",
+            ]
+            + audio_paths
+            + [  # Add all audio paths here
+                "--model",
+                self.config.get("whisper_model_size", "large-v2"),
+                "--diarize",
+                "--hf_token",
+                self.hf_token or "",
+                "--output_dir",
+                output_dir,
+                "--output_format",
+                self.config.get(
+                    "whisper_output_format", "json"
+                ),  # Assuming JSON is suitable for batch output
+                "--device",
+                self.device,
+            ]
+        )
         lang: Optional[str] = self.config.get("whisper_language")
         if lang:
             command.extend(["--language", lang])
@@ -264,47 +285,114 @@ class Transcription:
         if compute_type:
             command.extend(["--compute_type", compute_type])
 
+        # Consider adding --batch_size if not already included from config
+        # WhisperX handles batching internally when given multiple files.
+
         self._run_whisperx(command, log_file_handle, session_id)
 
-    def convert_json_to_structured(self, json_path: str) -> SegmentsList:
-        log_info(f"Reading WhisperX JSON output from: {json_path}")
-        try:
-            with open(json_path, "r", encoding="utf-8") as f:
-                data: Dict = json.load(f)
-        except FileNotFoundError as e:
-            log_error(f"WhisperX output JSON file not found at {json_path}")
-            raise e
-        except json.JSONDecodeError as e:
-            log_error(f"Failed to decode JSON from {json_path}")
-            raise e
+    # MODIFIED: convert_json_to_structured to handle batch output and source mapping
+    def convert_json_to_structured(
+        self,
+        output_dir: str,
+        local_path_to_original_source_map: Dict[Path, str],
+    ) -> SegmentsList:
+        """
+        Reads WhisperX JSON output from a batch run and structures it,
+        adding source identifiers based on the original audio file paths mapping.
+        """
+        output_dir_path = Path(output_dir)
+        log_info(f"Reading WhisperX batch JSON output from: {output_dir_path}")
 
-        structured: SegmentsList = []
-        segments: List[Dict] = data.get("segments", [])
-        if not isinstance(segments, list):
+        all_segments: SegmentsList = []
+
+        # We no longer need to build source_map from original_audio_paths here.
+        # The mapping from local temp path to original source ID is provided.
+
+        found_json_files = list(output_dir_path.glob("*.json"))
+
+        if not found_json_files:
             log_warning(
-                f"'segments' key in {json_path} is not a list. Processing as empty."
+                f"No WhisperX JSON files found in batch output directory: {output_dir_path}"
             )
-            segments = []
-
-        log_info(f"Structuring {len(segments)} segments from WhisperX output...")
-
-        for i, segment in enumerate(segments):
-            text: str = segment.get("text", "").strip()
-            start_time: Optional[float] = segment.get("start")
-            end_time: Optional[float] = segment.get("end")
-            speaker: str = segment.get("speaker", "unknown")
-            words: List[Dict[str, Any]] = segment.get("words", [])
-
-            segment_output: Segment = {
-                "start": start_time,
-                "end": end_time,
-                "text": text,
-                "speaker": speaker,
-                "words": words,
-            }
-            structured.append(segment_output)
+            return []
 
         log_info(
-            f"Finished structuring segments. Returning {len(structured)} segments."
+            f"Found {len(found_json_files)} JSON files in batch output. Processing..."
         )
-        return structured
+
+        for json_file in found_json_files:
+            # Try to find the corresponding local audio file path
+            # This might involve heuristics based on how WhisperX names output files.
+            # A common pattern is `input_file_stem.json`.
+            inferred_stem = json_file.stem
+
+            # Find the local audio path in the provided map whose stem matches inferred_stem
+            original_audio_path_in_map: Optional[Path] = None
+            for local_path in local_path_to_original_source_map.keys():
+                if local_path.stem == inferred_stem:
+                    original_audio_path_in_map = local_path
+                    break
+
+            if not original_audio_path_in_map:
+                log_warning(
+                    f"Could not find a matching local audio path for JSON file {json_file.name} in the provided map. Skipping."
+                )
+                continue
+
+            # Get the original source identifier using the found local audio path
+            original_source_identifier = local_path_to_original_source_map.get(
+                original_audio_path_in_map
+            )
+
+            if not original_source_identifier:
+                # Should not happen if we found it as a key, but good defensive check
+                log_warning(
+                    f"Could not retrieve original source identifier for local audio path {original_audio_path_in_map} from the map. Skipping JSON file {json_file.name}."
+                )
+                continue
+
+            log_info(
+                f"Reading JSON file {json_file.name} mapped to source: {original_source_identifier}"
+            )
+            try:
+                with open(json_file, "r", encoding="utf-8") as f:
+                    data: Dict = json.load(f)
+            except FileNotFoundError:
+                log_error(f"WhisperX output JSON file not found at {json_file}")
+                continue  # Skip this file but continue with others
+            except json.JSONDecodeError:
+                log_error(f"Failed to decode JSON from {json_file}")
+                continue  # Skip this file but continue with others
+
+            segments: List[Dict] = data.get("segments", [])
+            if not isinstance(segments, list):
+                log_warning(
+                    f"'segments' key in {json_file.name} is not a list. Processing as empty for this file."
+                )
+                segments = []
+
+            log_info(f"Structuring {len(segments)} segments from {json_file.name}...")
+
+            for i, segment in enumerate(segments):
+                text: str = segment.get("text", "").strip()
+                start_time: Optional[float] = segment.get("start")
+                end_time: Optional[float] = segment.get("end")
+                speaker: str = segment.get(
+                    "speaker", "unknown"
+                )  # WhisperX Diarization ID
+                words: List[Dict[str, Any]] = segment.get("words", [])
+
+                segment_output: Segment = {
+                    "source_id": original_source_identifier,  # Set source_id to the original identifier string
+                    "start": start_time,
+                    "end": end_time,
+                    "text": text,
+                    "speaker": speaker,  # Keep the WhisperX speaker ID
+                    "words": words,
+                }
+                all_segments.append(segment_output)
+
+        log_info(
+            f"Finished structuring segments from batch output. Total segments: {len(all_segments)}"
+        )
+        return all_segments
