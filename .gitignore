@@ -30,3 +30,6 @@ config.json
 
 # Plotting cache (matplotlib might create this)
 .matplotlib/
+
+# Wav2Vec2 checkpoint cache
+wav2vec2_checkpoints/

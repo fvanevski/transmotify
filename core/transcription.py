@@ -1,7 +1,5 @@
 # core/transcription.py
 import json
-import os
-import traceback
 import re
 from pathlib import Path
 from typing import Dict, List, Optional, TextIO, Any
@@ -9,12 +7,14 @@ from typing import Dict, List, Optional, TextIO, Any
 import yt_dlp  # noqa: F401
 
 from .logging import log_info, log_warning, log_error
+
 # Ensure safe_run accepts output_callback
 from .utils import safe_run
 
 
 Segment = Dict[str, Any]
 SegmentsList = List[Segment]
+
 
 class Transcription:
     config: Dict[str, Any]
@@ -36,73 +36,85 @@ class Transcription:
             # Refined regex for yt-dlp download progress: looks for percentage, size, speed, ETA
             progress_match = re.search(
                 r"\[download\]\s+([\d.]+%) of\s+~?([\d.]+\s*\w+)\s+at\s+([\d.]+\s*\w+/s)\s+ETA\s+([\d:]+)",
-                line
+                line,
             )
             if progress_match:
                 # Log progress at INFO level
-                log_info(f"[{session_id}] yt-dlp download progress: {progress_match.group(1).strip()} at {progress_match.group(3).strip()} (ETA: {progress_match.group(4).strip()})")
+                log_info(
+                    f"[{session_id}] yt-dlp download progress: {progress_match.group(1).strip()} at {progress_match.group(3).strip()} (ETA: {progress_match.group(4).strip()})"
+                )
             elif "[download] Destination:" in line:
-                 log_info(f"[{session_id}] yt-dlp destination: {line.split(':', 1)[1].strip()}")
+                log_info(
+                    f"[{session_id}] yt-dlp destination: {line.split(':', 1)[1].strip()}"
+                )
             elif "[download] 100%" in line:
-                 log_info(f"[{session_id}] yt-dlp download complete.")
+                log_info(f"[{session_id}] yt-dlp download complete.")
             elif "[info]" in line:
-                 # Log general info messages from yt-dlp
-                 log_info(f"[{session_id}] yt-dlp info: {line.split(':', 1)[1].strip()}")
+                # Log general info messages from yt-dlp
+                log_info(f"[{session_id}] yt-dlp info: {line.split(':', 1)[1].strip()}")
             elif "[ExtractAudio]" in line:
-                 log_info(f"[{session_id}] yt-dlp: Extracting audio...")
+                log_info(f"[{session_id}] yt-dlp: Extracting audio...")
             elif "[error]" in line.lower():
-                 # Log explicit errors from yt-dlp as errors
-                 log_error(f"[{session_id}] yt-dlp error: {line.strip()}")
+                # Log explicit errors from yt-dlp as errors
+                log_error(f"[{session_id}] yt-dlp error: {line.strip()}")
             # Note: Many yt-dlp informational messages are useful; adjust logging level or patterns as needed.
-
 
         safe_run(
             command,
             log_file_handle,
             session_id,
-            output_callback=yt_dlp_output_callback # Pass the callback here
+            output_callback=yt_dlp_output_callback,  # Pass the callback here
         )
         log_info(f"[{session_id}] yt-dlp finished.")
-
 
     # --- Wrapper function for ffmpeg ---
     def _run_ffmpeg(self, command: List[str], log_file_handle: TextIO, session_id: str):
         log_info(f"[{session_id}] Running ffmpeg...")
 
         def ffmpeg_output_callback(line: str):
-             # Refined regex for ffmpeg progress: looks for time and speed
-             # This pattern is common on stderr during encoding/conversion
-             progress_match = re.search(
-                 r"frame=\s*\d+\s+.*?time=\s*(\d{2}:\d{2}:\d{2}\.\d+).*?speed=\s*([\d.]+)x",
-                 line
-             )
-             if progress_match:
-                 # Log progress at INFO level
-                 log_info(f"[{session_id}] ffmpeg progress: time={progress_match.group(1)}, speed={progress_match.group(2)}x")
-             elif line.strip().startswith("Output #0"):
-                  log_info(f"[{session_id}] ffmpeg output configuration detected.")
-             elif line.strip().startswith("Stream mapping:"):
-                  log_info(f"[{session_id}] ffmpeg stream mapping: {line.split(':', 1)[1].strip()}")
-             elif "deprecated" in line.lower() or re.search(r":?\s*warning", line.lower()): # More robust warning check
-                  # Log warnings from ffmpeg
-                  log_warning(f"[{session_id}] ffmpeg warning: {line.strip()}")
-             elif "error" in line.lower() or "failed" in line.lower() or "fehler" in line.lower():
-                  # Log errors from ffmpeg
-                  log_error(f"[{session_id}] ffmpeg error: {line.strip()}")
-             # else: logging.debug(f"[{session_id}] ffmpeg raw: {line.strip()}") # Option to log unhandled lines
-
+            # Refined regex for ffmpeg progress: looks for time and speed
+            # This pattern is common on stderr during encoding/conversion
+            progress_match = re.search(
+                r"frame=\s*\d+\s+.*?time=\s*(\d{2}:\d{2}:\d{2}\.\d+).*?speed=\s*([\d.]+)x",
+                line,
+            )
+            if progress_match:
+                # Log progress at INFO level
+                log_info(
+                    f"[{session_id}] ffmpeg progress: time={progress_match.group(1)}, speed={progress_match.group(2)}x"
+                )
+            elif line.strip().startswith("Output #0"):
+                log_info(f"[{session_id}] ffmpeg output configuration detected.")
+            elif line.strip().startswith("Stream mapping:"):
+                log_info(
+                    f"[{session_id}] ffmpeg stream mapping: {line.split(':', 1)[1].strip()}"
+                )
+            elif "deprecated" in line.lower() or re.search(
+                r":?\s*warning", line.lower()
+            ):  # More robust warning check
+                # Log warnings from ffmpeg
+                log_warning(f"[{session_id}] ffmpeg warning: {line.strip()}")
+            elif (
+                "error" in line.lower()
+                or "failed" in line.lower()
+                or "fehler" in line.lower()
+            ):
+                # Log errors from ffmpeg
+                log_error(f"[{session_id}] ffmpeg error: {line.strip()}")
+            # else: logging.debug(f"[{session_id}] ffmpeg raw: {line.strip()}") # Option to log unhandled lines
 
         safe_run(
             command,
             log_file_handle,
             session_id,
-            output_callback=ffmpeg_output_callback # Pass the callback here
+            output_callback=ffmpeg_output_callback,  # Pass the callback here
         )
         log_info(f"[{session_id}] ffmpeg finished.")
 
-
     # --- Wrapper function for whisperx ---
-    def _run_whisperx(self, command: List[str], log_file_handle: TextIO, session_id: str):
+    def _run_whisperx(
+        self, command: List[str], log_file_handle: TextIO, session_id: str
+    ):
         # Build command log, masking the token (kept here as it's specific to whisperx command)
         command_log: List[str] = []
         skip_next = False
@@ -119,43 +131,49 @@ class Transcription:
         log_info(f"[{session_id}] Running WhisperX command: {' '.join(command_log)}")
 
         def whisperx_output_callback(line: str):
-             # Refined regex for whisperx output parsing
-             if "Loading model" in line:
-                 log_info(f"[{session_id}] WhisperX: Loading model...")
-             elif "Detected language:" in line:
-                 log_info(f"[{session_id}] WhisperX: {line.strip()}")
-             elif ">>Performing transcription..." in line:
-                 log_info(f"[{session_id}] WhisperX: Starting transcription...")
-             elif ">>Performing alignment..." in line:
-                 log_info(f"[{session_id}] WhisperX: Starting alignment...")
-             elif ">>Performing diarization..." in line:
-                 log_info(f"[{session_id}] WhisperX: Starting diarization...")
-             # Check for progress percentages like [ 50%] or 50%
-             elif re.search(r"\[?\s*\d+%\]?", line):
-                 log_info(f"[{session_id}] WhisperX progress: {line.strip()}")
-             elif "finished ASR inference" in line:
-                 log_info(f"[{session_id}] WhisperX: ASR inference finished.")
-             elif "finished alignment" in line:
-                 log_info(f"[{session_id}] WhisperX: Alignment finished.")
-             elif "finished diarization" in line:
-                 log_info(f"[{session_id}] WhisperX: Diarization finished.")
-             elif "CPU threads:" in line or "CUDA extensions are installed" in line or "device is" in line:
-                 log_info(f"[{session_id}] WhisperX setup: {line.strip()}")
-             # Catch general warnings/errors that don't contain 'Transcript:'
-             # Avoid logging the Transcript lines themselves as warnings/errors
-             elif ("error" in line.lower() or "fail" in line.lower() or re.search(r":?\s*warning", line.lower())) and "Transcript:" not in line:
-                 log_warning(f"[{session_id}] WhisperX warning/error: {line.strip()}")
-             # else: logging.debug(f"[{session_id}] WhisperX raw: {line.strip()}") # Option to log unhandled lines
-
+            # Refined regex for whisperx output parsing
+            if "Loading model" in line:
+                log_info(f"[{session_id}] WhisperX: Loading model...")
+            elif "Detected language:" in line:
+                log_info(f"[{session_id}] WhisperX: {line.strip()}")
+            elif ">>Performing transcription..." in line:
+                log_info(f"[{session_id}] WhisperX: Starting transcription...")
+            elif ">>Performing alignment..." in line:
+                log_info(f"[{session_id}] WhisperX: Starting alignment...")
+            elif ">>Performing diarization..." in line:
+                log_info(f"[{session_id}] WhisperX: Starting diarization...")
+            # Check for progress percentages like [ 50%] or 50%
+            elif re.search(r"\[?\s*\d+%\]?", line):
+                log_info(f"[{session_id}] WhisperX progress: {line.strip()}")
+            elif "finished ASR inference" in line:
+                log_info(f"[{session_id}] WhisperX: ASR inference finished.")
+            elif "finished alignment" in line:
+                log_info(f"[{session_id}] WhisperX: Alignment finished.")
+            elif "finished diarization" in line:
+                log_info(f"[{session_id}] WhisperX: Diarization finished.")
+            elif (
+                "CPU threads:" in line
+                or "CUDA extensions are installed" in line
+                or "device is" in line
+            ):
+                log_info(f"[{session_id}] WhisperX setup: {line.strip()}")
+            # Catch general warnings/errors that don't contain 'Transcript:'
+            # Avoid logging the Transcript lines themselves as warnings/errors
+            elif (
+                "error" in line.lower()
+                or "fail" in line.lower()
+                or re.search(r":?\s*warning", line.lower())
+            ) and "Transcript:" not in line:
+                log_warning(f"[{session_id}] WhisperX warning/error: {line.strip()}")
+            # else: logging.debug(f"[{session_id}] WhisperX raw: {line.strip()}") # Option to log unhandled lines
 
         safe_run(
             command,
             log_file_handle,
             session_id,
-            output_callback=whisperx_output_callback # Pass the callback here
+            output_callback=whisperx_output_callback,  # Pass the callback here
         )
         log_info(f"[{session_id}] WhisperX finished.")
-
 
     # --- download_audio_from_youtube now uses wrappers ---
     def download_audio_from_youtube(
@@ -181,9 +199,16 @@ class Transcription:
 
             self._run_ffmpeg(
                 [
-                    "ffmpeg", "-y", "-i", webm_path_str,
-                    "-ac", ffmpeg_ac, "-ar", ffmpeg_ar,
-                    "-vn", "-nostdin",
+                    "ffmpeg",
+                    "-y",
+                    "-i",
+                    webm_path_str,
+                    "-ac",
+                    ffmpeg_ac,
+                    "-ar",
+                    ffmpeg_ar,
+                    "-vn",
+                    "-nostdin",
                     wav_path_str,
                 ],
                 log_file_handle,
@@ -199,38 +224,47 @@ class Transcription:
                     webm_path.unlink()
                     log_info(f"Removed intermediate file: {webm_path}")
                 except OSError as e:
-                    warn_msg = f"WARN: Failed to remove intermediate file {webm_path}: {e}"
+                    warn_msg = (
+                        f"WARN: Failed to remove intermediate file {webm_path}: {e}"
+                    )
                     try:
                         if log_file_handle and not log_file_handle.closed:
                             log_file_handle.write(f"[{session_id}] {warn_msg}\n")
                         else:
                             print(warn_msg)
-                    except:
+                    except Exception:
                         print(warn_msg)
-
 
     # --- run_whisperx now uses its wrapper ---
     def run_whisperx(
         self, audio_path: str, output_dir: str, log_file_handle: TextIO, session_id: str
     ) -> None:
         command: List[str] = [
-            "whisperx", audio_path,
-            "--model", self.config.get("whisper_model_size", "large-v2"),
+            "whisperx",
+            audio_path,
+            "--model",
+            self.config.get("whisper_model_size", "large-v2"),
             "--diarize",
-            "--hf_token", self.hf_token or "",
-            "--output_dir", output_dir,
-            "--output_format", self.config.get("whisper_output_format", "json"),
-            "--device", self.device,
+            "--hf_token",
+            self.hf_token or "",
+            "--output_dir",
+            output_dir,
+            "--output_format",
+            self.config.get("whisper_output_format", "json"),
+            "--device",
+            self.device,
         ]
         lang: Optional[str] = self.config.get("whisper_language")
-        if lang: command.extend(["--language", lang])
+        if lang:
+            command.extend(["--language", lang])
         batch_size_val: Optional[Any] = self.config.get("whisper_batch_size")
-        if batch_size_val is not None: command.extend(["--batch_size", str(batch_size_val)])
+        if batch_size_val is not None:
+            command.extend(["--batch_size", str(batch_size_val)])
         compute_type: Optional[str] = self.config.get("whisper_compute_type")
-        if compute_type: command.extend(["--compute_type", compute_type])
+        if compute_type:
+            command.extend(["--compute_type", compute_type])
 
         self._run_whisperx(command, log_file_handle, session_id)
-
 
     def convert_json_to_structured(self, json_path: str) -> SegmentsList:
         log_info(f"Reading WhisperX JSON output from: {json_path}")
@@ -247,7 +281,9 @@ class Transcription:
         structured: SegmentsList = []
         segments: List[Dict] = data.get("segments", [])
         if not isinstance(segments, list):
-            log_warning(f"'segments' key in {json_path} is not a list. Processing as empty.")
+            log_warning(
+                f"'segments' key in {json_path} is not a list. Processing as empty."
+            )
             segments = []
 
         log_info(f"Structuring {len(segments)} segments from WhisperX output...")
@@ -268,5 +304,7 @@ class Transcription:
             }
             structured.append(segment_output)
 
-        log_info(f"Finished structuring segments. Returning {len(structured)} segments.")
+        log_info(
+            f"Finished structuring segments. Returning {len(structured)} segments."
+        )
         return structured
