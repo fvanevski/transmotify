@@ -32,3 +32,14 @@ config.json
 .matplotlib/
 
 wav2vec2_checkpoints/ # Ignore the wav2vec2 checkpoint directory
+wav2vec2_checkpoints/models--facebook--wav2vec2-base/.no_exist/0b5b8e868dd84f03fd87d01f9c4ff0f080fecfe8/model.safetensors
+wav2vec2_checkpoints/models--facebook--wav2vec2-base/.no_exist/0b5b8e868dd84f03fd87d01f9c4ff0f080fecfe8/model.safetensors.index.json
+wav2vec2_checkpoints/models--facebook--wav2vec2-base/blobs/3f24dc078fcba55ee1d417a413847ead40c093a3
+wav2vec2_checkpoints/models--facebook--wav2vec2-base/blobs/47d7dc533f6d412e1c021eb181615d006e403bed
+wav2vec2_checkpoints/models--facebook--wav2vec2-base/blobs/3249fe98bfc62fcbc26067f724716a6ec49d12c4728a2af1df659013905dff21
+wav2vec2_checkpoints/models--facebook--wav2vec2-base/blobs/6180a447f726e4a2ab8b50effaf0a96f5b161489c620087c3b05418f0179f875
+wav2vec2_checkpoints/models--facebook--wav2vec2-base/refs/main
+wav2vec2_checkpoints/models--facebook--wav2vec2-base/refs/refs/pr/10
+wav2vec2_checkpoints/models--facebook--wav2vec2-base/snapshots/0b5b8e868dd84f03fd87d01f9c4ff0f080fecfe8/preprocessor_config.json
+wav2vec2_checkpoints/models--facebook--wav2vec2-base/snapshots/0b5b8e868dd84f03fd87d01f9c4ff0f080fecfe8/pytorch_model.bin
+wav2vec2_checkpoints/models--facebook--wav2vec2-base/snapshots/8f171a9c76b3504a2c8e34cbcc7c0326a231e46b/model.safetensors
