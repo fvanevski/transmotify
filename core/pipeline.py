@@ -7,6 +7,7 @@ import os  # <--- ADDED IMPORT
 from collections import defaultdict
 from datetime import (
     datetime,
+    timezone,
 )  # <--- ENSURED DATETIME IMPORT (needed for logging helpers)
 from pathlib import Path
 import pandas as pd
@@ -192,7 +193,7 @@ class Pipeline:
             if log_file_handle and not log_file_handle.closed:
                 try:
                     log_file_handle.write(
-                        f"{datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} - ERROR - {err_msg}\n{traceback.format_exc()}\n"
+                        f"{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} - ERROR - {err_msg}\n{traceback.format_exc()}\n"
                     )
                     log_file_handle.flush()
                 except Exception as log_e:
@@ -468,8 +469,8 @@ class Pipeline:
                 "info",
                 f"Optional outputs - JSON Summary: {include_json_summary}, CSV Summary: {include_csv_summary}, Script: {include_script}, Plots: {include_plots}, Source Audio: {include_audio_in_zip}",
             )
-            for index, row in df.iterrows():
-                item_index = index + 1
+            for sequential_index, (index, row) in enumerate(df.iterrows()):
+                item_index = sequential_index + 1
                 item_identifier = f"item_{item_index:03d}"
                 batch_log(
                     "info",

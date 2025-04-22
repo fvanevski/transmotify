@@ -307,7 +307,7 @@ class Transcription:
                     if log_file_handle and not log_file_handle.closed:
                         try:
                             log_file_handle.write(f"[{session_id}] {warn_msg}\n")
-                        except:
+                        except Exception:
                             pass  # Ignore errors writing warning to log
 
     # --- run_whisperx --- MODIFIED TO RETURN PATH
