@@ -38,6 +38,7 @@ from .constants import (
 # Import fuzz for snippet matching
 from rapidfuzz import fuzz
 
+
 # Define Segment and SegmentsList types
 Segment = Dict[str, Any]
 SegmentsList = List[Segment]
@@ -80,7 +81,8 @@ def safe_run(
     session_id: Optional[str] = None,
     env: Optional[Dict[str, str]] = None,
     output_callback: Optional[Callable[[str], None]] = None,
-) -> None:
+    capture_output: bool = False,
+) -> Optional[str]:  # Changed return type hint
     """
     Runs an external command safely, logging output and handling errors.
 
@@ -90,10 +92,12 @@ def safe_run(
         session_id: An identifier for the session/process for logging.
         env: Optional dictionary of environment variables for the subprocess.
         output_callback: Optional function to process command output lines in real-time.
+        capture_output: If True, captures and returns the standard output as a string.
     """
     safe_command: List[str] = [str(item) for item in command]
     log_prefix: str = f"[{session_id if session_id else 'PROC'}] "
     process: Optional[subprocess.Popen] = None
+    captured_output_lines: List[str] = []  # Added to store captured output
 
     # Prepare the environment for the subprocess
     subprocess_env = os.environ.copy()
@@ -127,6 +131,10 @@ def safe_run(
                             f"WARN: Failed to write log line to file handle: {log_e} - Line: {line.strip()}"
                         )
 
+                # Capture output line if requested
+                if capture_output:
+                    captured_output_lines.append(line)
+
                 # Pass the line to the output callback
                 if output_callback:
                     try:
@@ -149,6 +157,11 @@ def safe_run(
 
         # Wait for the process and check return code
         return_code: int = process.wait()
+
+        # Return captured output if requested
+        if capture_output:
+            return "".join(captured_output_lines)  # Return as a single string
+
         if return_code != 0:
             error_msg: str = (
                 f"Command failed with exit code {return_code}: {' '.join(safe_command)}"
@@ -498,91 +511,68 @@ def run_ffprobe_duration_check(audio_path: Path, min_duration: float = 5.0) -> b
             return True  # Indicate check passed (long enough)
 
     except FileNotFoundError:
-        log_warning("ffprobe command not found. Skipping audio duration check.")
-        return True  # Skip check if ffprobe isn't installed, don't block processing
-    except subprocess.CalledProcessError as e:
-        log_error(f"ffprobe failed for {audio_path} with exit code {e.returncode}.")
-        log_error(f"ffprobe stderr: {e.stderr}")
         log_warning(
-            "Duration check failed due to ffprobe error. Proceeding with caution."
+            "ffprobe command not found. Cannot perform audio duration check. Proceeding."
         )
-        return True  # Proceed even if ffprobe fails, but log the error
-    except ValueError as e:
-        log_error(f"Could not parse ffprobe duration output '{duration_str}': {e}")
-        log_warning(
-            "Duration check failed due to parsing error. Proceeding with caution."
-        )
-        return True  # Proceed if parsing fails
+        return True  # Proceed if ffprobe is not available
     except Exception as e:
-        log_error(f"An unexpected error occurred during ffprobe duration check: {e}")
-        log_warning("Duration check failed unexpectedly. Proceeding with caution.")
+        log_warning(f"Error running ffprobe duration check: {e}. Proceeding.")
         return True  # Proceed on other errors
 
 
 def save_script_transcript(
-    segments: SegmentsList, output_dir: Path, suffix: str
+    segments: SegmentsList,
+    output_path: Path,
+    item_identifier: str,
+    log_file_handle: Optional[TextIO] = None,
 ) -> Optional[Path]:
     """
-    Saves a plain text transcript formatted like a script (Speaker: Text).
-
-    Args:
-        segments: List of segment dictionaries (must contain 'speaker' and 'text').
-                  Should ideally have speaker labels already applied/finalized.
-        output_dir: The directory where the transcript file will be saved.
-        suffix: A string to append to the base filename (e.g., job_id or item_identifier).
-
-    Returns:
-        The Path object to the saved transcript file, or None if saving failed.
+    Saves a simple text transcript of the segments, grouped by speaker.
+    Includes timestamps and speaker labels.
     """
-    # Use the constant for the base filename, add the suffix
-    script_filename = f"{Path(SCRIPT_TRANSCRIPT_NAME).stem}_{suffix}.txt"
-    script_path = output_dir / script_filename
-    log_info(f"Attempting to save script transcript to: {script_path}")
-
-    # Ensure output directory exists
-    create_directory(output_dir)
-
-    # Group segments first to combine consecutive utterances by the same speaker
-    grouped_blocks = group_segments_by_speaker(segments)
-    if not grouped_blocks:
-        log_warning(
-            "No speaker blocks generated from segments. Cannot save script transcript."
-        )
-        return None
+    log_prefix = f"[{item_identifier}] "
+    log_info(f"{log_prefix}Attempting to save script transcript to: {output_path}")
 
     try:
-        with open(script_path, "w", encoding="utf-8") as f:
-            for block in grouped_blocks:
-                speaker = block.get("speaker", "UNKNOWN")
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write(f"Transcript for {item_identifier}\n")
+            f.write("=" * (len(item_identifier) + 15) + "\n\n")
+
+            # Group segments by speaker for a more readable script
+            speaker_blocks = group_segments_by_speaker(segments)
+
+            def format_time(seconds):
+                if seconds is None:
+                    return "[??:??]"
+                # Format as HH:MM:SS, handling potential large values
+                hours = int(seconds // 3600)
+                minutes = int((seconds % 3600) // 60)
+                seconds = seconds % 60
+                if hours > 0:
+                    return f"[{hours:02d}:{minutes:02d}:{seconds:06.2f}]"
+                else:
+                    return f"[{minutes:02d}:{seconds:06.2f}]"
+
+            for block in speaker_blocks:
+                speaker = block.get("speaker", "unknown")
                 text = block.get("text", "").strip()
                 start_time = block.get("start")
                 end_time = block.get("end")
 
-                # Format timestamp if available
-                time_str = ""
-                if start_time is not None and end_time is not None:
-                    # Helper to format seconds into HH:MM:SS.fff
-                    def format_time(seconds):
-                        try:
-                            secs = float(seconds)
-                            hours = int(secs // 3600)
-                            minutes = int((secs % 3600) // 60)
-                            seconds_rem = secs % 60
-                            return f"{hours:02}:{minutes:02}:{seconds_rem:06.3f}"
-                        except (ValueError, TypeError):
-                            return "??:??:??.???"  # Fallback for invalid time
+                if text:
+                    time_str = f"{format_time(start_time)} - {format_time(end_time)}"
+                    f.write(f"{time_str} {speaker}: {text}\n\n")
 
-                    time_str = f"[{format_time(start_time)} - {format_time(end_time)}] "
-
-                # Write line: [TIMESTAMP] SPEAKER: Text
-                f.write(
-                    f"{time_str}{speaker}: {text}\n\n"
-                )  # Add extra newline for readability
-
-        log_info(f"Script transcript saved successfully to: {script_path}")
-        return script_path
+        log_info(f"{log_prefix}Script transcript saved successfully.")
+        return output_path
 
     except Exception as e:
-        log_error(f"Failed to save script transcript to {script_path}: {e}")
-        log_error(traceback.format_exc())  # Log full traceback for debugging
+        error_msg = f"{log_prefix}Failed to save script transcript to {output_path}: {e}\n{traceback.format_exc()}"
+        log_error(error_msg)
+        if log_file_handle and not log_file_handle.closed:
+            try:
+                log_file_handle.write(f"{error_msg}\n")
+                log_file_handle.flush()
+            except Exception:
+                pass  # Ignore errors writing error to log
         return None

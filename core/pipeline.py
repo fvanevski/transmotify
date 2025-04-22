@@ -91,13 +91,16 @@ class Pipeline:
         item_work_dir: Path,
         log_file_handle: TextIO,
         session_id: str,
-    ) -> Path:
+    ) -> Tuple[Path, Dict[str, Any]]:
         # (No changes to this method's logic)
         log_info(f"[{session_id}] Preparing audio input from: {input_source}")
         audio_path: Optional[Path] = None
+        metadata: Dict[str, Any] = {}  # Initialize metadata dictionary
+
         if input_source.startswith(("http://", "https://")):
             try:
-                audio_path = self.transcription.download_audio_from_youtube(
+                # download_audio_from_youtube now returns a tuple
+                audio_path, metadata = self.transcription.download_audio_from_youtube(
                     input_source, str(item_work_dir), log_file_handle, session_id
                 )
             except (RuntimeError, FileNotFoundError) as e:
@@ -114,6 +117,13 @@ class Pipeline:
                 log_info(f"[{session_id}] Copying local file {src_path} to {dest_path}")
                 shutil.copy(str(src_path), str(dest_path))
                 audio_path = dest_path
+                # For local files, create a basic metadata dictionary
+                metadata = {
+                    "source_path": str(src_path),
+                    "filename": src_path.name,
+                    "prepared_path": str(audio_path),
+                    "source_type": "local_file",
+                }
                 if audio_path.suffix.lower() != ".wav":
                     log_warning(
                         f"[{session_id}] Input file {audio_path.name} is not WAV. WhisperX compatibility depends on ffmpeg."
@@ -125,12 +135,14 @@ class Pipeline:
                 raise RuntimeError(
                     f"Failed to prepare local audio file {input_source}"
                 ) from e
+
         if audio_path is None or not audio_path.is_file():
             raise FileNotFoundError(
                 f"Could not obtain valid audio file from source: {input_source}"
             )
+
         log_info(f"[{session_id}] Audio prepared successfully at: {audio_path}")
-        return audio_path
+        return audio_path, metadata  # Return both audio path and metadata
 
     def _process_batch_item(
         self,
@@ -138,7 +150,9 @@ class Pipeline:
         item_work_path: Path,
         log_file_handle: TextIO,
         item_identifier: str,
-    ) -> Tuple[Optional[SegmentsList], Optional[Path], SpeakerMapping]:
+    ) -> Tuple[
+        Optional[SegmentsList], Optional[Path], SpeakerMapping, Optional[Dict[str, Any]]
+    ]:
         # (No changes to this method's logic)
         audio_path_in_work_dir: Optional[Path] = None
         segments: Optional[SegmentsList] = None
@@ -147,9 +161,18 @@ class Pipeline:
         try:
             output_temp_dir = item_work_path / "output"
             output_temp_dir.mkdir(parents=True, exist_ok=True)
-            audio_path_in_work_dir = self._prepare_audio_input(
+            # _prepare_audio_input now returns audio_path and metadata
+            audio_path_in_work_dir, metadata = self._prepare_audio_input(
                 input_source, item_work_path, log_file_handle, item_identifier
             )
+
+            # Check if audio_path_in_work_dir is None before proceeding
+            if audio_path_in_work_dir is None:
+                log_error(
+                    f"[{item_identifier}] Audio preparation failed, cannot proceed with transcription."
+                )
+                return None, None, None, metadata  # Return metadata even on failure
+
             min_duration = float(self.config.get("min_diarization_duration", 5.0))
             duration_ok = utils.run_ffprobe_duration_check(
                 audio_path_in_work_dir, min_duration
@@ -185,7 +208,12 @@ class Pipeline:
             log_info(
                 f"[{item_identifier}] Speaker mapping (currently empty): {speaker_mapping}"
             )
-            return segments, audio_path_in_work_dir, speaker_mapping
+            return (
+                segments,
+                audio_path_in_work_dir,
+                speaker_mapping,
+                metadata,
+            )  # Return metadata
         except Exception as e:
             err_msg = f"[{item_identifier}] ERROR during batch item processing: {e}"
             log_error(err_msg)
@@ -200,7 +228,7 @@ class Pipeline:
                     print(
                         f"WARN: Failed to write item processing error to log file: {log_e}"
                     )
-            return None, None, None
+            return None, None, None, None  # Return None for metadata on failure
 
     def _finalize_batch_item(
         self,
@@ -213,6 +241,7 @@ class Pipeline:
         include_csv_summary: bool,
         include_script: bool,
         include_plots: bool,
+        metadata: Optional[Dict[str, Any]] = None,  # Add metadata parameter
     ) -> Optional[Dict[str, Any]]:
         # (No changes to this method's logic, relies on imported datetime)
         item_output_dir = item_work_path / "output"
@@ -274,11 +303,15 @@ class Pipeline:
             )
             generated_files_paths = {}
             try:
-                segments_final_serializable = utils.convert_floats(segments)
+                # Create the final data structure including segments and metadata
+                final_output_data: Dict[str, Any] = {
+                    "segments": utils.convert_floats(segments),
+                    "metadata": metadata
+                    if metadata is not None
+                    else {},  # Include metadata
+                }
                 with open(final_json_path, "w", encoding="utf-8") as f:
-                    json.dump(
-                        segments_final_serializable, f, indent=2, ensure_ascii=False
-                    )
+                    json.dump(final_output_data, f, indent=2, ensure_ascii=False)
                 item_log("info", "Final structured transcript saved successfully.")
                 generated_files_paths["final_structured_json"] = final_json_path
             except Exception as e:
@@ -492,8 +525,11 @@ class Pipeline:
                 youtube_url = youtube_url_raw.strip()
                 item_work_path = batch_work_path / item_identifier
                 item_work_path.mkdir(exist_ok=True)
-                segments, audio_path, speaker_mapping = self._process_batch_item(
-                    youtube_url, item_work_path, log_file_handle, item_identifier
+                # _process_batch_item now returns metadata as well
+                segments, audio_path, speaker_mapping, metadata = (
+                    self._process_batch_item(
+                        youtube_url, item_work_path, log_file_handle, item_identifier
+                    )
                 )
                 if segments is None or audio_path is None:
                     batch_log("error", f"[{item_identifier}] Core processing failed.")
@@ -512,6 +548,7 @@ class Pipeline:
                     include_csv_summary=include_csv_summary,
                     include_script=include_script,
                     include_plots=include_plots,
+                    metadata=metadata,  # Pass metadata to finalization
                 )
                 if generated_files is None:
                     batch_log(

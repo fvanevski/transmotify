@@ -4,7 +4,7 @@ import os
 import traceback
 import re
 from pathlib import Path
-from typing import Dict, List, Optional, TextIO, Any
+from typing import Dict, List, Optional, TextIO, Any, Tuple
 
 # Import yt-dlp to ensure it's checked/available, even if only used via command line
 try:
@@ -198,7 +198,7 @@ class Transcription:
     # --- download_audio_from_youtube ---
     def download_audio_from_youtube(
         self, youtube_url: str, temp_dir: str, log_file_handle: TextIO, session_id: str
-    ) -> Path:
+    ) -> Tuple[Path, Dict[str, Any]]:
         """
         Downloads audio from a YouTube URL, converts it to WAV, and returns the path.
 
@@ -279,7 +279,69 @@ class Transcription:
             log_info(
                 f"[{session_id}] Audio downloaded and converted successfully to: {wav_path}"
             )
-            return wav_path  # Return the Path object
+
+            # --- Fetch Metadata ---
+            log_info(f"[{session_id}] Fetching metadata for {youtube_url}...")
+            metadata_command = [
+                "yt-dlp",
+                "-j",  # Output JSON
+                "--",
+                youtube_url,
+            ]
+            metadata_output = safe_run(
+                metadata_command,
+                log_file_handle,
+                session_id,
+                capture_output=True,  # Capture stdout
+            )
+
+            metadata: Dict[str, Any] = {}
+            if (
+                metadata_output
+            ):  # safe_run now returns the output string if capture_output is True
+                try:
+                    video_info = json.loads(
+                        metadata_output
+                    )  # Load from the returned string
+                    # Extract required fields, providing defaults for safety
+                    metadata = {
+                        "youtube_url": youtube_url,  # Include the URL itself
+                        "video_title": video_info.get("fulltitle"),
+                        "video_description": video_info.get("description"),
+                        "video_uploader": video_info.get("uploader"),
+                        "video_creators": video_info.get(
+                            "creators"
+                        ),  # This might be a list or None
+                        "upload_date": video_info.get("upload_date"),  # Format YYYYMMDD
+                        "release_date": video_info.get(
+                            "release_date"
+                        ),  # Format YYYY-MM-DD
+                    }
+                    log_info(f"[{session_id}] Metadata fetched successfully.")
+                except json.JSONDecodeError as e:
+                    log_error(
+                        f"[{session_id}] Failed to decode yt-dlp metadata JSON: {e}"
+                    )
+                    metadata = {
+                        "youtube_url": youtube_url,
+                        "error": "Failed to decode metadata JSON",
+                    }
+                except Exception as e:
+                    log_error(
+                        f"[{session_id}] Unexpected error processing metadata: {e}"
+                    )
+                    metadata = {
+                        "youtube_url": youtube_url,
+                        "error": f"Unexpected metadata error: {e}",
+                    }
+            else:
+                log_warning(f"[{session_id}] No metadata output from yt-dlp.")
+                metadata = {
+                    "youtube_url": youtube_url,
+                    "warning": "No metadata output from yt-dlp",
+                }
+
+            return wav_path, metadata  # Return both audio path and metadata
 
         except (RuntimeError, FileNotFoundError) as e:
             log_error(
