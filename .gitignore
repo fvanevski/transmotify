@@ -43,3 +43,4 @@ wav2vec2_checkpoints/models--facebook--wav2vec2-base/refs/refs/pr/10
 wav2vec2_checkpoints/models--facebook--wav2vec2-base/snapshots/0b5b8e868dd84f03fd87d01f9c4ff0f080fecfe8/preprocessor_config.json
 wav2vec2_checkpoints/models--facebook--wav2vec2-base/snapshots/0b5b8e868dd84f03fd87d01f9c4ff0f080fecfe8/pytorch_model.bin
 wav2vec2_checkpoints/models--facebook--wav2vec2-base/snapshots/8f171a9c76b3504a2c8e34cbcc7c0326a231e46b/model.safetensors
+.roomodes
