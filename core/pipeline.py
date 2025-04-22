@@ -1,971 +1,610 @@
 # core/pipeline.py
-import csv
-import json
 import shutil
-import subprocess
 import traceback
 import zipfile
-import difflib
-import string  # Add this line to import the string module
-import re  # Add this line to import the regular expression module
-from collections import Counter, defaultdict
-from datetime import datetime
+import json
+import os  # <--- ADDED IMPORT
+from collections import defaultdict
+from datetime import (
+    datetime,
+)  # <--- ENSURED DATETIME IMPORT (needed for logging helpers)
 from pathlib import Path
-import statistics
-import numpy as np
 import pandas as pd
 from typing import Any, Dict, List, Optional, TextIO, Tuple
 
-from rapidfuzz import fuzz  # Import the fuzz module from fuzzywuzzy
-
+# --- Core Module Imports ---
 from .constants import (
-    EMO_VAL,
     LOG_FILE_NAME,
-    INTERMEDIATE_STRUCTURED_TRANSCRIPT_NAME,
     FINAL_STRUCTURED_TRANSCRIPT_NAME,
-    EMOTION_SUMMARY_CSV_NAME,
-    EMOTION_SUMMARY_JSON_NAME,
-    SCRIPT_TRANSCRIPT_NAME,
     FINAL_ZIP_SUFFIX,
-    DEFAULT_SNIPPET_MATCH_THRESHOLD,
 )
 from .logging import log_error, log_info, log_warning
-from .plotting import generate_all_plots
 from .transcription import Transcription
 from .multimodal_analysis import MultimodalAnalysis
-from .utils import (
-    parse_xlsx_snippets,
-    match_snippets_to_speakers,  # Added import for the moved function
-    group_segments_by_speaker,  # Added import for the helper function
-)
+import core.utils as utils
+import core.reporting as reporting
 
+# Optional fallback diarizer (Pyannote)
+try:
+    from pyannote.audio import Pipeline as PyannotePipeline
 
+    PYANNOTE_AVAILABLE = True
+except ImportError:
+    log_warning("Pyannote.audio not found. Fallback diarization will not be available.")
+    PyannotePipeline = None
+    PYANNOTE_AVAILABLE = False
+except Exception as e:
+    log_warning(
+        f"Failed to import Pyannote.audio: {e}. Fallback diarization unavailable."
+    )
+    PyannotePipeline = None
+    PYANNOTE_AVAILABLE = False
+
+# Type Hints
 Segment = Dict[str, Any]
 SegmentsList = List[Segment]
 EmotionSummary = Dict[str, Dict[str, Any]]
-
-
-# Helper function to convert numpy.float32 objects to standard Python floats
-def convert_floats(obj):
-    """
-    Recursively convert numpy.float32 objects to standard Python floats
-    in a dictionary or list.
-    """
-    if isinstance(obj, dict):
-        return {k: convert_floats(v) for k, v in obj.items()}
-    elif isinstance(obj, list):
-        return [convert_floats(elem) for elem in obj]
-    elif type(obj).__name__ == "float32":  # Check type name string
-        return float(obj)
-    else:
-        return obj
+SpeakerMapping = Optional[Dict[str, str]]
 
 
 class Pipeline:
     """
-    Orchestrates the end-to-end speech processing workflow, focusing on batch processing:
-      1) Prepare audio (download or copy)
-      2) WhisperX transcription + diarization
-      3) Multimodal emotion & deception analysis
-      4) Snippet-based speaker matching (applied during finalization)
-      5) Process batch XLSX (handle multiple URLs, apply snippet labels directly, finalize each item)
+    Orchestrates the end-to-end speech processing workflow for batch processing.
+    Focuses on sequence: audio prep -> transcription -> analysis -> labeling -> reporting -> packaging.
+    Speaker labeling via snippets is DEPRECATED. Placeholder for video-based labeling exists.
     """
 
     def __init__(self, config: Dict[str, Any]):
+        """Initializes the pipeline components."""
         self.config = config
         self.transcription = Transcription(config)
         log_info("Initializing MultimodalAnalysis in Pipeline...")
         self.mm = MultimodalAnalysis(config)
-        # Optional fallback diarizer
-        try:
-            from pyannote.audio import Pipeline as PyannotePipeline
-
-            pyannote_model_source = config.get(
-                "pyannote_diarization_model", "pyannote/speaker-diarization"
-            )
-            hf_token = config.get("hf_token")
-            if not hf_token:
-                log_warning(
-                    "Hugging Face token is not set. Pyannote diarization may fail."
+        self.diarizer = None
+        if PYANNOTE_AVAILABLE and PyannotePipeline:
+            try:
+                pyannote_model_source = config.get(
+                    "pyannote_diarization_model", "pyannote/speaker-diarization-3.1"
                 )
-
-            self.diarizer = PyannotePipeline.from_pretrained(
-                pyannote_model_source, use_auth_token=hf_token
-            )
-            log_info(
-                f"Pyannote diarization model '{pyannote_model_source}' loaded successfully."
-            )
-        except Exception as e:
-            log_warning(f"Failed to load Pyannote diarization model: {e}")
-            self.diarizer = None
+                hf_token = config.get("hf_token")
+                if hf_token:
+                    self.diarizer = PyannotePipeline.from_pretrained(
+                        pyannote_model_source, use_auth_token=hf_token
+                    )
+                    log_info(
+                        f"Pyannote diarization model '{pyannote_model_source}' loaded successfully."
+                    )
+                else:
+                    log_warning(
+                        "Pyannote diarization model requires HF token, but none found. Skipping load."
+                    )
+            except Exception as e:
+                log_warning(
+                    f"Failed to load Pyannote diarization model '{pyannote_model_source}': {e}"
+                )
+                self.diarizer = None
 
     def _prepare_audio_input(
         self,
         input_source: str,
-        temp_dir: Path,
-        log_file: TextIO,
+        item_work_dir: Path,
+        log_file_handle: TextIO,
         session_id: str,
     ) -> Path:
-        """Download from URL or copy local file; return path to input audio."""
+        # (No changes to this method's logic)
         log_info(f"[{session_id}] Preparing audio input from: {input_source}")
+        audio_path: Optional[Path] = None
         if input_source.startswith(("http://", "https://")):
-            dl = self.transcription.download_audio_from_youtube(
-                input_source, str(temp_dir), log_file, session_id
-            )
-            if not dl:
-                raise RuntimeError(f"Audio download failed for URL: {input_source}")
-            audio_path = Path(dl)
+            try:
+                audio_path = self.transcription.download_audio_from_youtube(
+                    input_source, str(item_work_dir), log_file_handle, session_id
+                )
+            except (RuntimeError, FileNotFoundError) as e:
+                raise RuntimeError(
+                    f"Audio download/conversion failed for URL: {input_source}"
+                ) from e
         else:
-            src = Path(input_source)
-            if not src.exists():
-                raise ValueError(f"Invalid input source: {input_source}")
-            unique_filename = f"{src.stem}_{session_id}{src.suffix}"
-            dest = temp_dir / unique_filename
-            shutil.copy(src, dest)
-            audio_path = dest
-
-        if not audio_path.exists():
-            raise FileNotFoundError(f"Could not obtain audio from: {input_source}")
-        log_info(f"[{session_id}] Audio prepared at: {audio_path}")
-        return audio_path
-
-    def _run_ffprobe_duration_check(self, audio_path: Path) -> bool:
-        """Check audio length via ffprobe; skip if not available."""
-        try:
-            res = subprocess.run(
-                [
-                    "ffprobe",
-                    "-v",
-                    "error",
-                    "-show_entries",
-                    "format=duration",
-                    "-of",
-                    "default=noprint_wrappers=1:nokey=1",
-                    str(audio_path),
-                ],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            duration = float(res.stdout.strip())
-            min_dur = float(self.config.get("min_diarization_duration", 5.0))
-            if duration < min_dur:
-                log_warning(
-                    f"Audio too short ({duration:.1f}s < {min_dur}s) for optimal diarization."
-                )
-                return False
-        except FileNotFoundError:
-            log_warning("ffprobe not installed; skipping duration check.")
-            return False
-        except Exception as e:
-            log_error(f"ffprobe error: {e}")
-            log_warning(
-                "Duration check failed, proceeding but diarization quality may be affected."
-            )
-            return False
-        return True
-
-    def _find_whisperx_output(self, out_dir: Path, audio_path: Path) -> Path:
-        """Locate the primary WhisperX JSON in output directory."""
-        expected = out_dir / f"{audio_path.stem}.json"
-        if expected.exists():
-            log_info(f"Found WhisperX output at expected path: {expected}")
-            return expected
-        log_warning(
-            f"Expected WhisperX output {expected.name} not found; searching directory {out_dir}..."
-        )
-        standard_output_names = [
-            INTERMEDIATE_STRUCTURED_TRANSCRIPT_NAME,
-            FINAL_STRUCTURED_TRANSCRIPT_NAME,
-            EMOTION_SUMMARY_JSON_NAME,
-            EMOTION_SUMMARY_CSV_NAME,
-            SCRIPT_TRANSCRIPT_NAME,
-        ]
-        found_json_files = [
-            f
-            for f in out_dir.iterdir()
-            if f.suffix == ".json" and f.name not in standard_output_names
-        ]
-        if found_json_files:
-            if len(found_json_files) > 1:
-                log_warning(
-                    f"Multiple potential WhisperX JSON files found in {out_dir}. Using the first one: {found_json_files[0].name}"
-                )
-            log_info(f"Found WhisperX output by searching: {found_json_files[0]}")
-            return found_json_files[0]
-
-        raise FileNotFoundError(f"No suitable WhisperX JSON output found in {out_dir}")
-
-    def _group_segments_by_speaker(
-        self, segments: SegmentsList
-    ) -> List[Dict[str, Any]]:
-        """Group consecutive segments by speaker into blocks."""
-        blocks = []
-        cur = None
-        for i, seg in enumerate(segments):
-            spk = seg.get("speaker")
-            spk = str(spk) if spk is not None else "unknown"
-            text = (seg.get("text") or "").strip()
-            start, end = seg.get("start"), seg.get("end")
-
-            if not cur or cur["speaker"] != spk:
-                if cur:
-                    blocks.append(cur)
-                cur = {
-                    "speaker": spk,
-                    "text": text,
-                    "start": start,
-                    "end": end,
-                    "indices": [i],
-                }
-            else:
-                if text:
-                    cur["text"] += (" " if cur["text"] else "") + text
-                if end is not None:
-                    cur["end"] = end
-                cur["indices"].append(i)
-
-        if cur:
-            blocks.append(cur)
-
-        log_info(f"Grouped {len(segments)} segments into {len(blocks)} speaker blocks.")
-        return blocks
-
-    def _save_script_transcript(
-        self, segments: SegmentsList, output_dir: Path, suffix: str
-    ) -> Optional[Path]:
-        """Saves a plain text transcript formatted like a script."""
-        script_path = output_dir / f"{Path(SCRIPT_TRANSCRIPT_NAME).stem}_{suffix}.txt"
-        log_info(f"Saving script transcript to: {script_path}")
-
-        grouped_blocks = self._group_segments_by_speaker(segments)
-
-        try:
-            with open(script_path, "w", encoding="utf-8") as f:
-                for block in grouped_blocks:
-                    speaker = block.get("speaker", "UNKNOWN")
-                    text = block.get("text", "").strip()
-                    start_time = block.get("start")
-                    end_time = block.get("end")
-
-                    time_str = ""
-                    if start_time is not None and end_time is not None:
-                        start_h = int(start_time // 3600)
-                        start_m = int((start_time % 3600) // 60)
-                        start_s = start_time % 60
-                        end_h = int(end_time // 3600)
-                        end_m = int((end_time % 3600) // 60)
-                        end_s = end_time % 60
-                        time_str = f"[{start_h:02}:{start_m:02}:{start_s:06.3f} - {end_h:02}:{end_m:02}:{end_s:06.3f}] "
-
-                    f.write(f"{time_str}{speaker}: {text}\n\n")
-
-            log_info(f"Script transcript saved successfully to: {script_path}")
-            return script_path
-
-        except Exception as e:
-            log_error(f"Failed to save script transcript to {script_path}: {e}")
-            return None
-
-    def _calculate_emotion_summary(
-        self, segments: SegmentsList, include_timeline: bool = False
-    ) -> EmotionSummary:
-        speaker_stats = defaultdict(list)
-        timeline = defaultdict(list)
-
-        for seg in segments:
-            spk = str(seg.get("speaker", "unknown"))
-            # Use the final 'emotion' key which comes from fused results or fallbacks
-            emo = seg.get("emotion", "unknown")
-
-            speaker_stats[spk].append(emo)
-
-            if include_timeline:
-                timeline_entry: Dict[str, Any] = {
-                    "time": seg.get("start", 0.0),
-                    "emotion": emo,
-                }
-                if "fused_emotion_confidence" in seg:
-                    timeline_entry["fused_emotion_confidence"] = seg[
-                        "fused_emotion_confidence"
-                    ]
-                if "significant_text_emotions" in seg:
-                    timeline_entry["significant_text_emotions"] = seg[
-                        "significant_text_emotions"
-                    ]
-
-                timeline[spk].append(timeline_entry)
-
-        summary = {}
-        for spk, emos in speaker_stats.items():
-            # Calculate transitions including all observed emotion labels
-            transitions = sum(1 for i in range(1, len(emos)) if emos[i] != emos[i - 1])
-
-            emotion_counts = Counter(emos)
-            # Filterable emotions for dominant calculation: exclude unknown, skipped, failed, no_text
-            filterable_emotions = [
-                e
-                for e in emos
-                if e
-                not in ["unknown", "analysis_skipped", "analysis_failed", "no_text"]
-            ]
-
-            # Determine dominant emotion from filterable ones, fallback to "neutral" or "unknown"
-            dominant = (
-                Counter(filterable_emotions).most_common(1)[0][0]
-                if filterable_emotions
-                else "unknown"
-            )  # Fallback to unknown
-
-            vals = [EMO_VAL.get(e, 0.0) for e in emos]
-            vol = statistics.stdev(vals) if len(vals) > 1 else 0.0
-            mean_score = statistics.mean(vals) if vals else 0.0
-
-            entry = {
-                "total_segments": len(emos),
-                "emotion_transitions": transitions,
-                "dominant_emotion": dominant,
-                "emotion_volatility": round(vol, 3),
-                "emotion_score_mean": round(mean_score, 3),
-                "emotion_counts": dict(emotion_counts),
-            }
-            if include_timeline:
-                entry["emotion_timeline"] = sorted(
-                    timeline[spk], key=lambda x: x.get("time", 0.0)
-                )
-
-            summary[spk] = entry
-
-        return summary
-
-    def _save_emotion_summary(
-        self,
-        stats: EmotionSummary,
-        out_dir: Path,
-        suffix: str,
-    ) -> Tuple[Optional[Path], Optional[Path]]:
-        out_dir.mkdir(parents=True, exist_ok=True)
-        csv_filename = f"{Path(EMOTION_SUMMARY_CSV_NAME).stem}_{suffix}.csv"
-        json_filename = f"{Path(EMOTION_SUMMARY_JSON_NAME).stem}_{suffix}.json"
-        csv_path = out_dir / csv_filename
-        json_path = out_dir / json_filename
-
-        stats_serializable = convert_floats(stats)
-        try:
-            json_path.write_text(
-                json.dumps(stats_serializable, indent=2, ensure_ascii=False),
-                encoding="utf-8",
-            )
-            log_info(f"Emotion summary JSON saved to: {json_path}")
-        except Exception as e:
-            log_error(f"Failed to save emotion summary JSON to {json_path}: {e}")
-            json_path = None  # Indicate failure
-
-        all_emotion_types_in_counts = sorted(
-            list(
-                set(
-                    e
-                    for count_dict in [
-                        data.get("emotion_counts", {}) for data in stats.values()
-                    ]
-                    for e in count_dict.keys()
-                )
-            )
-        )
-
-        standard_headers = [
-            "speaker",
-            "total_segments",
-            "emotion_transitions",
-            "dominant_emotion",
-            "emotion_volatility",
-            "emotion_score_mean",
-        ]
-        final_headers = standard_headers + [
-            h for h in all_emotion_types_in_counts if h not in standard_headers
-        ]
-
-        try:
-            with open(csv_path, "w", newline="", encoding="utf-8") as cf:
-                writer = csv.DictWriter(cf, fieldnames=final_headers)
-                writer.writeheader()
-                for spk, data in stats.items():
-                    row = {"speaker": spk}
-                    row.update(
-                        {k: data.get(k, "") for k in standard_headers if k != "speaker"}
-                    )
-
-                    emotion_counts_data = data.get("emotion_counts", {})
-                    for emo_header in all_emotion_types_in_counts:
-                        row[emo_header] = emotion_counts_data.get(emo_header, 0)
-
-                    writer.writerow(row)
-            log_info(f"Emotion summary CSV saved to: {csv_path}")
-        except Exception as e:
-            log_error(f"Failed to save emotion summary CSV to {csv_path}: {e}")
-            csv_path = None  # Indicate failure
-
-        return csv_path, json_path
-
-    def _create_final_zip(
-        self,
-        zip_path: Path,
-        files_to_add: Dict[Path, str],
-        plot_files: List[Path],
-        log_file: Path,
-    ) -> Optional[Path]:
-        log_info(f"Creating ZIP: {zip_path}")
-        final_output_dir = zip_path.parent
-        final_output_dir.mkdir(parents=True, exist_ok=True)
-        log_info(f"Ensured final output directory exists: {final_output_dir}")
-
-        temp_zip_path = zip_path.with_suffix(".temp.zip")
-
-        try:
-            with zipfile.ZipFile(str(temp_zip_path), "w", zipfile.ZIP_DEFLATED) as zf:
-                for fp, arc_name in files_to_add.items():
-                    if fp and fp.exists():  # Check if path is not None and exists
-                        zf.write(fp, arcname=arc_name)
-                        log_info(f"Added {fp.name} to zip as {arc_name}.")
-                    else:
-                        log_warning(f"Missing file to add to zip: {fp}. Skipping.")
-
-                for p in plot_files:
-                    if p and p.exists():  # Check if path is not None and exists
-                        zf.write(p, arcname=f"plots/{p.name}")
-                        log_info(f"Added plot {p.name} to zip as plots/{p.name}.")
-                    else:
-                        log_warning(f"Missing plot to add to zip: {p}. Skipping.")
-
-            shutil.move(str(temp_zip_path), str(zip_path))
-            log_info(f"Successfully created final ZIP: {zip_path}")
-            return zip_path  # Return the created zip path
-
-        except Exception as e:
-            log_error(
-                f"Failed to create ZIP file {zip_path}: {e}\n{traceback.format_exc()}"
-            )
-            if temp_zip_path.exists():
-                try:
-                    temp_zip_path.unlink()
-                    log_info(f"Cleaned up temporary zip file: {temp_zip_path}")
-                except Exception as unlink_e:
+            src_path = Path(input_source)
+            if not src_path.is_file():
+                raise ValueError(f"Invalid local input file path: {input_source}")
+            unique_filename = f"{src_path.stem}_{session_id}{src_path.suffix}"
+            dest_path = item_work_dir / unique_filename
+            try:
+                log_info(f"[{session_id}] Copying local file {src_path} to {dest_path}")
+                shutil.copy(str(src_path), str(dest_path))
+                audio_path = dest_path
+                if audio_path.suffix.lower() != ".wav":
                     log_warning(
-                        f"Failed to clean up temporary zip file {temp_zip_path}: {unlink_e}"
+                        f"[{session_id}] Input file {audio_path.name} is not WAV. WhisperX compatibility depends on ffmpeg."
                     )
-            return None  # Indicate failure
+            except Exception as e:
+                log_error(
+                    f"[{session_id}] Failed to copy local file {src_path} to {dest_path}: {e}"
+                )
+                raise RuntimeError(
+                    f"Failed to prepare local audio file {input_source}"
+                ) from e
+        if audio_path is None or not audio_path.is_file():
+            raise FileNotFoundError(
+                f"Could not obtain valid audio file from source: {input_source}"
+            )
+        log_info(f"[{session_id}] Audio prepared successfully at: {audio_path}")
+        return audio_path
 
     def _process_batch_item(
         self,
         input_source: str,
-        speaker_snippet_map: Optional[Dict[str, str]],
-        work_path: Path,
+        item_work_path: Path,
         log_file_handle: TextIO,
-        job_id: str,
-    ) -> Tuple[Optional[SegmentsList], Optional[Path], Optional[Dict[str, str]]]:
-        """
-        Processes a single audio source (URL or file) for batch mode:
-        download/copy -> ffprobe -> whisperx -> structuring -> multimodal analysis -> snippet matching.
-        Returns (segments_with_original_ids, audio_path_in_work_dir, snippet_mapping).
-        Does NOT perform finalization or save intermediate JSON/previews.
-        """
-        audio_path = None
-        segments: SegmentsList = []
-        snippet_mapping: Dict[str, str] = {}
-        audio_path_in_work_dir = (
-            None  # To store the path to the copied/downloaded WAV in work_path
-        )
-
+        item_identifier: str,
+    ) -> Tuple[Optional[SegmentsList], Optional[Path], SpeakerMapping]:
+        # (No changes to this method's logic)
+        audio_path_in_work_dir: Optional[Path] = None
+        segments: Optional[SegmentsList] = None
+        speaker_mapping: SpeakerMapping = None
+        whisperx_json_path: Optional[Path] = None
         try:
-            output_temp_dir = work_path / "output"
-            output_temp_dir.mkdir(exist_ok=True)
-
-            # --- Prepare Audio Input ---
-            status_message = f"[{job_id}] Preparing audio input from: {input_source}"
-            log_info(status_message)
-            log_file_handle.write(f"{status_message}\n")
-            log_file_handle.flush()
-            audio_path = self._prepare_audio_input(
-                input_source, work_path, log_file_handle, job_id
+            output_temp_dir = item_work_path / "output"
+            output_temp_dir.mkdir(parents=True, exist_ok=True)
+            audio_path_in_work_dir = self._prepare_audio_input(
+                input_source, item_work_path, log_file_handle, item_identifier
             )
-            audio_path_in_work_dir = (
-                audio_path  # This is the path within the job's temp directory
+            min_duration = float(self.config.get("min_diarization_duration", 5.0))
+            duration_ok = utils.run_ffprobe_duration_check(
+                audio_path_in_work_dir, min_duration
             )
-
-            # --- Check Audio Duration ---
-            status_message = f"[{job_id}] Checking audio duration..."
-            log_info(status_message)
-            log_file_handle.write(f"{status_message}\n")
-            log_file_handle.flush()
-            duration_check_ok = self._run_ffprobe_duration_check(audio_path)
-            if not duration_check_ok:
+            if not duration_ok:
                 log_warning(
-                    f"[{job_id}] Audio duration check issues or ffprobe not available."
+                    f"[{item_identifier}] Audio duration potentially too short."
                 )
-
-            # --- Run WhisperX ---
-            status_message = (
-                f"[{job_id}] Running WhisperX for transcription and diarization..."
+            log_info(
+                f"[{item_identifier}] Running WhisperX transcription and diarization..."
             )
-            log_info(status_message)
-            log_file_handle.write(f"{status_message}\n")
-            log_file_handle.flush()
-            self.transcription.run_whisperx(
-                str(audio_path), str(output_temp_dir), log_file_handle, job_id
+            whisperx_json_path = self.transcription.run_whisperx(
+                audio_path_in_work_dir,
+                output_temp_dir,
+                log_file_handle,
+                item_identifier,
             )
-
-            status_message = f"[{job_id}] Structuring WhisperX output..."
-            log_info(status_message)
-            log_file_handle.write(f"{status_message}\n")
-            log_file_handle.flush()
-            whisperx_json_path = self._find_whisperx_output(output_temp_dir, audio_path)
-            segments = self.transcription.convert_json_to_structured(
-                str(whisperx_json_path)
-            )  # Segments have original SPEAKER_XX IDs
-
-            # --- Perform Multimodal Emotion Analysis ---
-            status_message = f"[{job_id}] Running multimodal emotion analysis..."
-            log_info(status_message)
-            log_file_handle.write(f"{status_message}\n")
-            log_file_handle.flush()
-            # Analyze segments with original SPEAKER_XX IDs
+            log_info(
+                f"[{item_identifier}] WhisperX completed. Output JSON: {whisperx_json_path}"
+            )
+            log_info(f"[{item_identifier}] Structuring WhisperX output...")
+            segments = self.transcription.convert_json_to_structured(whisperx_json_path)
+            log_info(f"[{item_identifier}] Structured {len(segments)} segments.")
+            log_info(f"[{item_identifier}] Running multimodal emotion analysis...")
             segments = self.mm.analyze(
-                segments, str(audio_path), input_source
-            )  # Assuming analyze can handle audio_path
-
-            # --- Perform Snippet-Based Speaker Matching ---
-            status_message = f"[{job_id}] Performing snippet-based speaker matching..."
-            log_info(status_message)
-            log_file_handle.write(f"{status_message}\n")
-            log_file_handle.flush()
-            # Match snippets using segments with original SPEAKER_XX IDs. Segments are NOT modified here.
-            snippet_mapping = match_snippets_to_speakers(  # Call the moved function
-                segments,
-                speaker_snippet_map or {},
-                self.config,  # Pass config
+                segments, str(audio_path_in_work_dir), input_source
             )
-
-            return segments, audio_path_in_work_dir, snippet_mapping
-
+            log_info(f"[{item_identifier}] Multimodal analysis complete.")
+            log_info(
+                f"[{item_identifier}] Placeholder for video preview speaker labeling."
+            )
+            speaker_mapping = {}
+            log_info(
+                f"[{item_identifier}] Speaker mapping (currently empty): {speaker_mapping}"
+            )
+            return segments, audio_path_in_work_dir, speaker_mapping
         except Exception as e:
-            err_msg = f"[{job_id}] ERROR during batch item processing: {e}"
-            log_error(err_msg + "\n" + traceback.format_exc())
+            err_msg = f"[{item_identifier}] ERROR during batch item processing: {e}"
+            log_error(err_msg)
+            log_error(traceback.format_exc())
             if log_file_handle and not log_file_handle.closed:
-                log_file_handle.write(err_msg + "\n" + traceback.format_exc() + "\n")
-                log_file_handle.flush()
-            return None, None, None  # Indicate failure
+                try:
+                    log_file_handle.write(
+                        f"{datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} - ERROR - {err_msg}\n{traceback.format_exc()}\n"
+                    )
+                    log_file_handle.flush()
+                except Exception as log_e:
+                    print(
+                        f"WARN: Failed to write item processing error to log file: {log_e}"
+                    )
+            return None, None, None
 
-    # MODIFIED: _finalize_batch_item to save files locally within item_work_path, no zipping or cleanup
     def _finalize_batch_item(
         self,
         segments: SegmentsList,
-        snippet_mapping: Optional[Dict[str, str]],  # Changed type hint to Optional
-        audio_path_in_work_dir: Optional[
-            Path
-        ],  # Path to the WAV file in the item work directory
-        item_work_path: Path,  # The work path for THIS batch item
-        log_file_handle: TextIO,  # Pass the main batch log handle for logging
-        item_identifier: str,  # e.g., "youtube_video_id" or "row_number"
-    ) -> str:  # Return only a status message string for this item
-        """
-        Finalizes a single batch item: apply snippet labels, save final JSON,
-        generate summaries, plots, script transcript. Files are saved within
-        the item_work_path/output directory. Does NOT create a ZIP or clean up.
-        Returns a status message for this item.
-        """
+        speaker_mapping: SpeakerMapping,
+        item_identifier: str,
+        item_work_path: Path,
+        log_file_handle: TextIO,
+        include_json_summary: bool,
+        include_csv_summary: bool,
+        include_script: bool,
+        include_plots: bool,
+    ) -> Optional[Dict[str, Any]]:
+        # (No changes to this method's logic, relies on imported datetime)
+        item_output_dir = item_work_path / "output"
+        item_output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Use the provided log file handle for logging - Keeping the local item_log function for structured messages
         def item_log(level, message):
             full_message = f"[{item_identifier}] {message}"
-            if log_file_handle:
+            log_func = log_info
+            if level == "warning":
+                log_func = log_warning
+            elif level == "error":
+                log_func = log_error
+            log_func(full_message)
+            if log_file_handle and not log_file_handle.closed:
                 try:
+                    # Uses datetime here
                     log_file_handle.write(
                         f"{datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} - {level.upper()} - {full_message}\n"
                     )
                     log_file_handle.flush()
                 except Exception as log_e:
-                    log_error(
-                        f"[{item_identifier}] Failed to write to batch log file: {log_e} - Message: {message}"
-                    )
                     print(
-                        f"WARN: Failed to write to batch log file: {log_e} - Message: {message}"
-                    )  # Fallback print
-            # Also log to main application logger
-            if level == "info":
-                log_info(full_message)
-            elif level == "warning":
-                log_warning(full_message)
-            elif level == "error":
-                log_error(full_message)
+                        f"WARN: Failed to write to item log file: {log_e} - Message: {message}"
+                    )
 
-        item_log(
-            "info", f"Starting finalization for {item_identifier} in: {item_work_path}"
-        )
-        status_msg = f"[{item_identifier}] Starting finalization..."
-
+        item_log("info", f"Starting finalization for item in: {item_output_dir}")
         try:
             if not segments:
-                status_msg = (
-                    f"[{item_identifier}] ERROR: No segments found for finalization."
-                )
-                item_log("error", status_msg)
-                return status_msg
-
-            # Apply snippet-matched labels (ONLY for batch processing)
-            item_log("info", "Applying snippet-matched speaker labels...")
-            segments_relabeled_count = 0
-            for seg in segments:
-                original_speaker_id_in_segment = seg.get(
-                    "speaker"
-                )  # This is the original SPEAKER_XX ID
-                original_speaker_id_str = (
-                    str(original_speaker_id_in_segment)
-                    if original_speaker_id_in_segment is not None
-                    else "unknown"
-                )
-
-                # Apply the snippet-matched label if a mapping exists for this original SPEAKER_XX ID
-                if (
-                    snippet_mapping is not None
-                    and original_speaker_id_str in snippet_mapping
-                ):  # Added None check
-                    user_label = snippet_mapping[original_speaker_id_str]
-                    if (
-                        user_label
-                    ):  # Only relabel if the snippet mapping provided a non-empty label
-                        seg["speaker"] = user_label
-                        segments_relabeled_count += 1
-                    else:
-                        # If snippet mapping was empty string, keep original SPEAKER_XX ID
-                        seg["speaker"] = (
-                            original_speaker_id_str  # Explicitly set to original ID if empty label provided
-                        )
-                # If original_speaker_id_str is NOT in snippet_mapping, it remains its original SPEAKER_XX ID
-
-            item_log(
-                "info",
-                f"Applied snippet labels to {segments_relabeled_count} segments.",
-            )
-
-            # Save the FINAL relabeled structured JSON to the output directory within item_work_path
-            item_log("info", "Saving final relabeled structured transcript JSON...")
-            output_temp_dir = (
-                item_work_path / "output"
-            )  # Save within the item's output subdir
-            output_temp_dir.mkdir(exist_ok=True)  # Ensure output subdir exists
-            final_json_name = (
-                f"{item_identifier}_{Path(FINAL_STRUCTURED_TRANSCRIPT_NAME).name}"
-            )
-            final_json_path = output_temp_dir / final_json_name
-
-            segments_final_serializable = convert_floats(segments)
-
-            with open(final_json_path, "w", encoding="utf-8") as f:
-                json.dump(segments_final_serializable, f, indent=2, ensure_ascii=False)
-            item_log(
-                "info",
-                f"Final relabeled structured transcript saved to: {final_json_path}",
-            )
-
-            # Save the script-formatted plain text transcript
-            item_log("info", "Saving script-formatted transcript...")
-            # Use the item_identifier in the script filename suffix
-            script_transcript_path = self._save_script_transcript(
-                segments, output_temp_dir, item_identifier
-            )
-            if script_transcript_path:
+                item_log("error", "No segments provided for finalization.")
+                return None
+            if speaker_mapping:
                 item_log(
-                    "info", f"Script transcript saved to: {script_transcript_path}"
+                    "info",
+                    f"Applying speaker labels based on mapping: {speaker_mapping}",
                 )
-
-            # Calculate and save emotion summary (CSV and JSON)
-            item_log("info", "Calculating and saving emotion summary...")
-            stats = self._calculate_emotion_summary(segments, include_timeline=True)
-            # Use the item_identifier in the summary filenames suffix
-            csv_path, json_summary_path = self._save_emotion_summary(
-                stats, output_temp_dir, item_identifier
-            )
-            if csv_path and json_summary_path:
+                segments_relabeled_count = 0
+                for seg in segments:
+                    original_speaker_id = seg.get("speaker", "unknown")
+                    if original_speaker_id in speaker_mapping:
+                        final_label = speaker_mapping[original_speaker_id]
+                        if final_label:
+                            seg["speaker"] = final_label
+                            segments_relabeled_count += 1
                 item_log(
-                    "info", f"Emotion summary saved to: {csv_path}, {json_summary_path}"
+                    "info",
+                    f"Applied speaker labels to {segments_relabeled_count} segments.",
                 )
             else:
                 item_log(
-                    "warning", "Failed to save all emotion summary files for this item."
+                    "info",
+                    "No speaker mapping provided (video labeling pending). Keeping original SPEAKER_XX IDs.",
                 )
-
-            # Generate plots
-            item_log("info", "Generating plots...")
-            plots: List[str] = []
+            final_json_name = (
+                f"{item_identifier}_{Path(FINAL_STRUCTURED_TRANSCRIPT_NAME).name}"
+            )
+            final_json_path = item_output_dir / final_json_name
+            item_log(
+                "info", f"Saving final structured transcript to: {final_json_path}"
+            )
+            generated_files_paths = {}
             try:
-                # Use the item_identifier in the plot filenames suffix, save to item's output subdir
-                plots = generate_all_plots(stats, str(output_temp_dir), item_identifier)
-                item_log("info", f"Generated {len(plots)} plot file(s) for this item.")
-            except Exception as p:
+                segments_final_serializable = utils.convert_floats(segments)
+                with open(final_json_path, "w", encoding="utf-8") as f:
+                    json.dump(
+                        segments_final_serializable, f, indent=2, ensure_ascii=False
+                    )
+                item_log("info", "Final structured transcript saved successfully.")
+                generated_files_paths["final_structured_json"] = final_json_path
+            except Exception as e:
                 item_log(
-                    "warning", f"Plot generation failed for {item_identifier}: {p}"
+                    "error",
+                    f"Failed to save final structured transcript: {e}\n{traceback.format_exc()}",
                 )
-                plots = []
-
-            # Note: audio_path_in_work_dir (the WAV file) is already in the item_work_path.
-            # All other outputs are now saved in item_work_path/output.
-            # No zip creation or cleanup is done here.
-
-            status_msg = f"[{item_identifier}] ✅ Processing and finalization complete."
-            item_log("info", status_msg)
-            return status_msg  # Return success status
-
+                return None
+            item_log("info", "Generating optional report outputs...")
+            try:
+                report_outputs = reporting.generate_item_report_outputs(
+                    segments=segments,
+                    item_identifier=item_identifier,
+                    item_output_dir=item_output_dir,
+                    config=self.config,
+                    log_file_handle=log_file_handle,
+                    include_json_summary=include_json_summary,
+                    include_csv_summary=include_csv_summary,
+                    include_script=include_script,
+                    include_plots=include_plots,
+                )
+                generated_files_paths.update(report_outputs)
+                item_log(
+                    "info", f"Generated report outputs: {list(report_outputs.keys())}"
+                )
+            except Exception as e:
+                item_log(
+                    "error",
+                    f"Error during optional report generation step: {e}\n{traceback.format_exc()}",
+                )
+            item_log("info", f"Finalization complete for item.")
+            return generated_files_paths
         except Exception as e:
-            err_msg = f"[{item_identifier}] ERROR during finalization: {e}"
-            item_log("error", err_msg + "\n" + traceback.format_exc())
-            status_msg = err_msg  # Return error status
-            return status_msg
+            item_log(
+                "error",
+                f"Unexpected error during finalization: {e}\n{traceback.format_exc()}",
+            )
+            return None
 
-    # MODIFIED: process_batch_xlsx to create a single master zip and handle cleanup
+    def create_final_zip(
+        self,
+        zip_path: Path,
+        files_to_add: Dict[str, Path],
+        log_file_handle: Optional[TextIO] = None,
+        batch_job_id: Optional[str] = None,
+    ) -> Optional[Path]:
+        # (No changes to this method's logic, relies on imported os)
+        log_prefix = f"[{batch_job_id}] " if batch_job_id else ""
+        log_info(f"{log_prefix}Attempting to create final ZIP archive: {zip_path}")
+        final_output_dir = zip_path.parent
+        try:
+            final_output_dir.mkdir(parents=True, exist_ok=True)
+            log_info(
+                f"{log_prefix}Ensured final output directory exists: {final_output_dir}"
+            )
+        except Exception as e:
+            log_error(
+                f"{log_prefix}Failed to create final output directory {final_output_dir}: {e}"
+            )
+            return None
+        # Uses os.getpid() here
+        temp_zip_path = zip_path.with_suffix(f".{os.getpid()}.temp.zip")
+        files_added_count = 0
+        files_skipped_count = 0
+        try:
+            with zipfile.ZipFile(str(temp_zip_path), "w", zipfile.ZIP_DEFLATED) as zf:
+                for arc_name, local_path in files_to_add.items():
+                    if local_path and local_path.is_file():
+                        try:
+                            zf.write(local_path, arcname=arc_name)
+                            files_added_count += 1
+                        except Exception as e:
+                            log_warning(
+                                f"{log_prefix}Failed to add file {local_path} to zip as {arc_name}: {e}"
+                            )
+                            files_skipped_count += 1
+                    elif local_path:
+                        log_warning(
+                            f"{log_prefix}File not found or is not a file, skipping: {local_path}"
+                        )
+                        files_skipped_count += 1
+                    else:
+                        log_warning(
+                            f"{log_prefix}Invalid path for archive name '{arc_name}', skipping."
+                        )
+                        files_skipped_count += 1
+            if files_added_count == 0:
+                log_error(
+                    f"{log_prefix}No files were successfully added to the zip. Aborting."
+                )
+                if temp_zip_path.exists():
+                    temp_zip_path.unlink()
+                return None
+            shutil.move(str(temp_zip_path), str(zip_path))
+            log_info(f"{log_prefix}Successfully created final ZIP: {zip_path}")
+            log_info(
+                f"{log_prefix}Files added: {files_added_count}, Files skipped: {files_skipped_count}"
+            )
+            return zip_path
+        except Exception as e:
+            log_error(
+                f"{log_prefix}Failed to create ZIP file {zip_path}: {e}\n{traceback.format_exc()}"
+            )
+            if temp_zip_path.exists():
+                try:
+                    temp_zip_path.unlink()
+                    log_info(f"{log_prefix}Cleaned up temporary zip file.")
+                except Exception as unlink_e:
+                    log_warning(
+                        f"{log_prefix}Failed to clean up temporary zip file {temp_zip_path}: {unlink_e}"
+                    )
+            return None
+
     def process_batch_xlsx(self, xlsx_filepath: str) -> Tuple[str, str]:
-        """
-        Processes an XLSX file containing YouTube URLs and optional speaker snippets in batch.
-        Reads the file, processes each item, and generates results for each in subdirectories.
-        Creates a single master ZIP containing all item results.
-        Returns (status_message, results_summary_string).
-        """
-        batch_job_id = datetime.utcnow().strftime("batch-%Y%m%dT%H%M%S")
-        log_info(f"[{batch_job_id}] Starting batch processing for {xlsx_filepath}")
-        batch_status_message = f"[{batch_job_id}] Starting batch processing..."
-        batch_results_summary = ""
+        # (No changes to this method's logic, relies on imported datetime)
+        batch_job_id = f"batch-{datetime.utcnow().strftime('%Y%m%dT%H%M%S%f')[:-3]}"
+        log_info(f"[{batch_job_id}] Starting batch processing for: {xlsx_filepath}")
+        batch_status_message = f"[{batch_job_id}] Reading batch file..."
+        batch_results_list: List[str] = []
         base_temp_dir = Path(self.config.get("temp_dir", "./temp"))
-        batch_work_path = (
-            base_temp_dir / batch_job_id
-        )  # Main working directory for the batch
-        batch_log_path = (
-            batch_work_path / LOG_FILE_NAME
-        )  # Main log file for the batch process
-        log_file_handle = None
-        processed_item_identifiers: List[
-            str
-        ] = []  # To track which items were processed for cleanup
-
+        batch_work_path = base_temp_dir / batch_job_id
+        log_file_handle: Optional[TextIO] = None
+        all_output_files_for_zip: Dict[str, Path] = {}
+        total_items = 0
+        processed_count = 0
+        failed_count = 0
         try:
             batch_work_path.mkdir(parents=True, exist_ok=True)
+            batch_log_path = batch_work_path / LOG_FILE_NAME
             log_file_handle = open(batch_log_path, "w", encoding="utf-8")
             log_info(f"[{batch_job_id}] Batch log file created at: {batch_log_path}")
+            all_output_files_for_zip[batch_log_path.name] = batch_log_path
 
             def batch_log(level, message):
                 full_message = f"[{batch_job_id}] {message}"
-                if log_file_handle:
+                log_func = log_info
+                if level == "warning":
+                    log_func = log_warning
+                elif level == "error":
+                    log_func = log_error
+                log_func(full_message)
+                if log_file_handle and not log_file_handle.closed:
                     try:
+                        # Uses datetime here
                         log_file_handle.write(
                             f"{datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} - {level.upper()} - {full_message}\n"
                         )
                         log_file_handle.flush()
                     except Exception as log_e:
-                        log_error(
-                            f"[{batch_job_id}] Failed to write to batch log file: {log_e} - Message: {message}"
-                        )
                         print(
                             f"WARN: Failed to write to batch log file: {log_e} - Message: {message}"
-                        )  # Fallback print
-                # Also log to main application logger
-                if level == "info":
-                    log_info(full_message)
-                elif level == "warning":
-                    log_warning(full_message)
-                elif level == "error":
-                    log_error(full_message)
-
-            batch_log("info", batch_status_message)
-
-            # Read the XLSX file
-            batch_log("info", f"Reading batch file: {xlsx_filepath}")
-            df = pd.read_excel(xlsx_filepath)
-            batch_log("info", f"Successfully read {len(df)} rows from {xlsx_filepath}")
-
-            results: List[str] = []
-            url_col = self.config.get("batch_url_column", "YouTube URL")
-            snippet_col = self.config.get("batch_snippet_column", "Speaker Snippets")
-
-            if url_col not in df.columns:
-                raise ValueError(
-                    f"Required column '{url_col}' not found in the XLSX file."
-                )
-
-            batch_log(
-                "info",
-                f"Using URL column: '{url_col}' and Snippet column: '{snippet_col}'",
-            )
-
-            for index, row in df.iterrows():
-                # Using f"item_{index+1}" as item_identifier
-                item_index = int(
-                    row.name
-                )  # Use row.name for index and explicitly convert to int
-                item_identifier = (
-                    f"item_{item_index + 1}"  # Use the integer variable in f-string
-                )
-                # Ensure youtube_url is valid before adding to processed_item_identifiers
-                youtube_url_raw = row.get(url_col)
-                if not isinstance(youtube_url_raw, str) or not youtube_url_raw.strip():
-                    batch_log(
-                        "warning",
-                        f"[{item_identifier}] Skipping row {item_index + 1} due to missing or invalid YouTube URL.",  # Use the integer variable in f-string
-                    )
-                    results.append(
-                        f"[{item_identifier}] Skipped: Missing/Invalid YouTube URL."
-                    )
-                    continue
-
-                processed_item_identifiers.append(
-                    item_identifier
-                )  # Add to list ONLY if URL is valid
-
-                youtube_url = youtube_url_raw.strip()
-                snippets_string = row.get(snippet_col, "")
-
-                batch_log("info", f"[{item_identifier}] Processing URL: {youtube_url}")
-
-                # Parse snippets for this item (assuming parse_xlsx_snippets is in utils or imported)
-                speaker_snippet_map = parse_xlsx_snippets(
-                    snippets_string
-                )  # Call function from utils
-                batch_log(
-                    "info",
-                    f"[{item_identifier}] Parsed snippets: {speaker_snippet_map}",
-                )
-
-                # Create a temporary working directory for THIS batch item within the main batch dir
-                item_work_path = batch_work_path / item_identifier
-                item_work_path.mkdir(exist_ok=True)  # Create item-specific subdir
-
-                # Process the single item using the internal method
-                segments, audio_path_in_work_dir, snippet_mapping = (
-                    self._process_batch_item(
-                        youtube_url,
-                        speaker_snippet_map,
-                        item_work_path,  # Pass the item's work path
-                        log_file_handle,  # Pass the main batch log handle
-                        item_identifier,  # Use item identifier for logging inside the item process
-                    )
-                )
-
-                if segments is not None:
-                    # Finalize the single item (save files locally)
-                    item_status_msg = self._finalize_batch_item(
-                        segments,
-                        snippet_mapping,
-                        audio_path_in_work_dir,  # Pass audio path in work dir
-                        item_work_path,  # Pass the item's work path for saving outputs
-                        log_file_handle,  # Pass the main batch log handle
-                        item_identifier,  # Use item identifier for finalization logging prefix
-                    )
-                    results.append(f"[{item_identifier}] {item_status_msg}")
-                else:
-                    # _process_batch_item failed, status is already logged inside that method
-                    results.append(
-                        f"[{item_identifier}] Failed during processing step."
-                    )
-
-            # --- Batch Processing Loop Finished ---
-
-            # --- Create the single master ZIP bundle ---
-            batch_log("info", "Creating single master ZIP bundle for the batch...")
-            permanent_output_dir = Path(self.config.get("output_dir", "./output"))
-            # Use the batch job ID for the master zip filename
-            master_zip_name = f"{batch_job_id}_batch_results{FINAL_ZIP_SUFFIX}"
-            master_zip_location = permanent_output_dir / master_zip_name
-
-            batch_log("info", f"Master ZIP will be saved to: {master_zip_location}")
-
-            temp_master_zip_path = master_zip_location.with_suffix(".temp.zip")
-
-            try:
-                with zipfile.ZipFile(
-                    str(temp_master_zip_path), "w", zipfile.ZIP_DEFLATED
-                ) as zf:
-                    # Add the main batch log file at the root of the zip
-                    if batch_log_path.exists():
-                        zf.write(batch_log_path, arcname=batch_log_path.name)
-                        batch_log(
-                            "info",
-                            f"Added batch log file to master zip: {batch_log_path.name}",
                         )
 
-                    # Iterate through each item's working directory and add its contents to the zip
-                    for item_id in (
-                        processed_item_identifiers
-                    ):  # Only iterate through successfully identified items
-                        item_work_path = batch_work_path / item_id
-                        if item_work_path.exists():
-                            # Walk through the item's directory
-                            for item_file_path in item_work_path.rglob("*"):
-                                if item_file_path.is_file():
-                                    # Create an archive name that includes the item's folder
-                                    archive_name = f"{item_id}/{item_file_path.relative_to(item_work_path)}"
-                                    zf.write(item_file_path, arcname=archive_name)
-                                    # batch_log('info', f"Added {item_file_path.name} to master zip as {archive_name}") # Can be very verbose
-
-                shutil.move(str(temp_master_zip_path), str(master_zip_location))
-                batch_log(
-                    "info", f"Successfully created master ZIP: {master_zip_location}"
+            batch_log("info", f"Batch temporary directory: {batch_work_path}")
+            batch_log("info", f"Reading batch file: {xlsx_filepath}")
+            try:
+                df = pd.read_excel(xlsx_filepath, sheet_name=0)
+                total_items = len(df)
+                batch_log("info", f"Read {total_items} rows from {xlsx_filepath}")
+                if df.empty:
+                    raise ValueError("Excel file contains no data rows.")
+            except FileNotFoundError:
+                raise
+            except Exception as e:
+                raise ValueError(
+                    f"Failed to read or parse Excel file {xlsx_filepath}: {e}"
+                ) from e
+            url_col = self.config.get("batch_url_column", "YouTube URL")
+            if url_col not in df.columns:
+                raise ValueError(
+                    f"Required column '{url_col}' not found in the Excel file."
                 )
-                master_zip_path_str = str(master_zip_location)
-
-                batch_status_message = f"[{batch_job_id}] ✅ Batch processing complete. Download ready: {master_zip_path_str}"
-                batch_results_summary = (
-                    "Batch Results Summary:\n"
-                    + "\n".join(results)
-                    + f"\n\nMaster ZIP: {master_zip_path_str}"
-                )
-                batch_log("info", batch_status_message)
-                batch_log("info", batch_results_summary)
-
-            except Exception as zip_e:
-                err_msg = f"[{batch_job_id}] ERROR creating master ZIP file: {zip_e}"
-                batch_log("error", err_msg + "\n" + traceback.format_exc())
-                batch_status_message = err_msg
-                batch_results_summary = (
-                    "Batch Results Summary:\n"
-                    + "\n".join(results)
-                    + f"\n\nERROR creating master ZIP: {zip_e}"
-                )
-                master_zip_path_str = None  # Indicate failure
-
-        except FileNotFoundError:
-            batch_status_message = (
-                f"[{batch_job_id}] ERROR: Batch input file not found at {xlsx_filepath}"
+            batch_log("info", f"Using URL column: '{url_col}'")
+            snippet_col_name = self.config.get(
+                "batch_snippet_column", "Speaker Snippets"
             )
-            batch_log("error", batch_status_message)
-            batch_results_summary = batch_status_message
-        except pd.errors.EmptyDataError:
-            batch_status_message = f"[{batch_job_id}] ERROR: The uploaded Excel file {xlsx_filepath} is empty."
-            batch_log("error", batch_status_message)
-            batch_results_summary = batch_status_message
-        except Exception as e:
-            err_msg = f"[{batch_job_id}] An unexpected error occurred during batch processing setup or iteration: {e}"
-            batch_log("error", err_msg + "\n" + traceback.format_exc())
-            batch_status_message = err_msg
-            batch_results_summary = batch_status_message
-
-        finally:
-            # Ensure the main batch log file is closed
-            if log_file_handle and not log_file_handle.closed:
-                log_file_handle.close()
-
-            # Clean up the main batch temporary directory after processing and zipping
-            # This block should be aligned with the try/except block
-            if batch_work_path.exists():
-                batch_log(
-                    "info", f"Cleaning up batch temporary directory: {batch_work_path}"
+            if snippet_col_name in df.columns:
+                log_info(
+                    f"Note: Snippet column '{snippet_col_name}' found but will be ignored."
                 )
-                try:
-                    shutil.rmtree(batch_work_path)
-                    batch_log(
-                        "info", f"Batch temporary directory removed: {batch_work_path}"
-                    )
-                except OSError as e:
+            # Read flags from config
+            include_json_summary = self.config.get("include_json_summary", True)
+            include_csv_summary = self.config.get("include_csv_summary", False)
+            include_script = self.config.get("include_script_transcript", False)
+            include_plots = self.config.get("include_plots", False)
+            include_audio_in_zip = self.config.get("include_source_audio", True)
+            batch_log(
+                "info",
+                f"Optional outputs - JSON Summary: {include_json_summary}, CSV Summary: {include_csv_summary}, Script: {include_script}, Plots: {include_plots}, Source Audio: {include_audio_in_zip}",
+            )
+            for index, row in df.iterrows():
+                item_index = index + 1
+                item_identifier = f"item_{item_index:03d}"
+                batch_log(
+                    "info",
+                    f"--- Processing item {item_index}/{total_items} ({item_identifier}) ---",
+                )
+                youtube_url_raw = row.get(url_col)
+                if not isinstance(
+                    youtube_url_raw, str
+                ) or not youtube_url_raw.strip().startswith(("http:", "https:")):
                     batch_log(
                         "warning",
-                        f"Failed to remove batch temporary directory {batch_work_path}: {e}",
+                        f"[{item_identifier}] Skipping row {item_index}: Invalid or missing URL ('{youtube_url_raw}').",
                     )
-
-        # This return statement should be aligned with the try/except/finally block
-        return batch_status_message, batch_results_summary
+                    batch_results_list.append(
+                        f"[{item_identifier}] Skipped: Invalid URL."
+                    )
+                    failed_count += 1
+                    continue
+                youtube_url = youtube_url_raw.strip()
+                item_work_path = batch_work_path / item_identifier
+                item_work_path.mkdir(exist_ok=True)
+                segments, audio_path, speaker_mapping = self._process_batch_item(
+                    youtube_url, item_work_path, log_file_handle, item_identifier
+                )
+                if segments is None or audio_path is None:
+                    batch_log("error", f"[{item_identifier}] Core processing failed.")
+                    batch_results_list.append(
+                        f"[{item_identifier}] Failed: Core processing error."
+                    )
+                    failed_count += 1
+                    continue
+                generated_files = self._finalize_batch_item(
+                    segments=segments,
+                    speaker_mapping=speaker_mapping,
+                    item_identifier=item_identifier,
+                    item_work_path=item_work_path,
+                    log_file_handle=log_file_handle,
+                    include_json_summary=include_json_summary,
+                    include_csv_summary=include_csv_summary,
+                    include_script=include_script,
+                    include_plots=include_plots,
+                )
+                if generated_files is None:
+                    batch_log(
+                        "error", f"[{item_identifier}] Finalization failed critically."
+                    )
+                    batch_results_list.append(
+                        f"[{item_identifier}] Failed: Finalization error."
+                    )
+                    failed_count += 1
+                    continue
+                processed_count += 1
+                batch_results_list.append(f"[{item_identifier}] Success.")
+                for key, path_or_list in generated_files.items():
+                    arc_folder = (
+                        f"{item_identifier}/plots"
+                        if key == "plot_paths"
+                        else item_identifier
+                    )
+                    if key == "plot_paths" and isinstance(path_or_list, list):
+                        for p_path in path_or_list:
+                            if p_path and p_path.is_file():
+                                all_output_files_for_zip[
+                                    f"{arc_folder}/{p_path.name}"
+                                ] = p_path
+                    elif isinstance(path_or_list, Path) and path_or_list.is_file():
+                        f_path = path_or_list
+                        all_output_files_for_zip[f"{arc_folder}/{f_path.name}"] = f_path
+                if include_audio_in_zip and audio_path.is_file():
+                    all_output_files_for_zip[f"{item_identifier}/{audio_path.name}"] = (
+                        audio_path
+                    )
+                batch_log(
+                    "info",
+                    f"--- Finished item {item_index}/{total_items} ({item_identifier}) ---",
+                )
+            batch_log(
+                "info",
+                f"Batch processing loop complete. Processed: {processed_count}, Failed/Skipped: {failed_count}",
+            )
+            if processed_count == 0:
+                raise RuntimeError("No items were processed successfully in the batch.")
+            permanent_output_dir = Path(self.config.get("output_dir", "./output"))
+            master_zip_name = f"{batch_job_id}_batch_results{FINAL_ZIP_SUFFIX}"
+            master_zip_path = permanent_output_dir / master_zip_name
+            batch_log("info", f"Creating master ZIP bundle: {master_zip_path}")
+            created_zip_path = self.create_final_zip(
+                master_zip_path, all_output_files_for_zip, log_file_handle, batch_job_id
+            )
+            if created_zip_path:
+                batch_status_message = f"[{batch_job_id}] ✅ Batch processing complete. Download ready: {created_zip_path}"
+            else:
+                batch_status_message = f"[{batch_job_id}] ❗️ Batch processing finished, but failed to create final ZIP bundle."
+            batch_log("info", batch_status_message)
+        except (FileNotFoundError, ValueError, RuntimeError) as e:
+            err_msg = f"[{batch_job_id}] ERROR: {e}"
+            batch_log("error", err_msg)
+            batch_status_message = err_msg
+        except Exception as e:
+            err_msg = f"[{batch_job_id}] An unexpected error occurred during batch processing: {e}"
+            batch_log("error", err_msg + "\n" + traceback.format_exc())
+            batch_status_message = err_msg
+        finally:
+            if log_file_handle and not log_file_handle.closed:
+                log_info(f"[{batch_job_id}] Closing batch log file.")
+                log_file_handle.close()
+            cleanup_temp = self.config.get("cleanup_temp_on_success", True)
+            should_cleanup = cleanup_temp and "✅" in batch_status_message
+            if batch_work_path.exists():
+                if should_cleanup:
+                    batch_log(
+                        "info",
+                        f"Cleaning up batch temporary directory: {batch_work_path}",
+                    )
+                    try:
+                        shutil.rmtree(batch_work_path)
+                        batch_log("info", f"Successfully removed batch temp directory.")
+                    except OSError as e:
+                        batch_log(
+                            "warning",
+                            f"Failed to remove batch temporary directory {batch_work_path}: {e}",
+                        )
+                else:
+                    batch_log(
+                        "warning",
+                        f"Skipping cleanup of temporary directory due to errors or config: {batch_work_path}",
+                    )
+        results_summary_string = (
+            f"Batch Processing Summary ({batch_job_id}):\n"
+            f"- Total Items Read: {total_items}\n"
+            f"- Successfully Processed: {processed_count}\n"
+            f"- Failed/Skipped: {failed_count}\n"
+            f"--------------------\n"
+            + "\n".join(batch_results_list)
+            + f"\n--------------------\n"
+            f"Overall Status: {batch_status_message}"
+        )
+        return batch_status_message, results_summary_string
