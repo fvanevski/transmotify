@@ -30,10 +30,14 @@ EmotionSummary = Dict[str, Dict[str, Any]]
 SpeakerLabels = Optional[Dict[str, str]]
 
 # Define structure for labeling state
+# --- ADDED 'output_flags' to item state ---
 LabelingItemState = Dict[
     str, Any
 ]  # Holds 'youtube_url', 'segments', 'eligible_speakers', 'collected_labels', 'audio_path', 'metadata', 'item_work_path'
-LabelingBatchState = Dict[str, LabelingItemState]
+# --- ADDED 'output_flags' to batch state ---
+LabelingBatchState = Dict[
+    str, Union[LabelingItemState, List[str], Dict[str, bool]]
+]  # Allow item state, item order list, and flags dict
 LabelingState = Dict[str, LabelingBatchState]
 
 
@@ -61,45 +65,69 @@ class Pipeline:
         if not batch_state:
             log_error(f"Labeling state not found for batch '{batch_job_id}'.")
             return None
+        # --- Ensure we get the item dict, not flags or order list ---
         item_state = batch_state.get(item_identifier)
-        if not item_state:
+        if (
+            not item_state
+            or not isinstance(item_state, dict)
+            or "segments" not in item_state
+        ):  # Basic check for item state structure
             log_error(
-                f"Labeling state not found for item '{item_identifier}' in batch '{batch_job_id}'."
+                f"Labeling state not found or invalid for item '{item_identifier}' in batch '{batch_job_id}'."
             )
             return None
-        return item_state
+        return item_state  # Type hint checker might complain, but logic is sound
 
     # --- Helper: Safely remove item state ---
     def _remove_item_state(self, batch_job_id: str, item_identifier: str):
         """Removes the state for an item after it's finalized or skipped."""
         if batch_job_id in self.labeling_state:
             if item_identifier in self.labeling_state[batch_job_id]:
-                # Clean up preview dir if it exists before removing state
-                item_work_path = self.labeling_state[batch_job_id][item_identifier].get(
-                    "item_work_path"
+                # Ensure we're deleting an item state dict
+                item_state_to_remove = self.labeling_state[batch_job_id].get(
+                    item_identifier
                 )
-                if item_work_path:
-                    preview_dir = Path(item_work_path) / "previews"
-                    if preview_dir.exists():
-                        try:
-                            shutil.rmtree(preview_dir)
-                            log_info(
-                                f"[{batch_job_id}-{item_identifier}] Removed preview clip directory during state removal: {preview_dir}"
-                            )
-                        except OSError as e:
-                            log_warning(
-                                f"[{batch_job_id}-{item_identifier}] Failed to remove preview clip directory {preview_dir} during state removal: {e}"
-                            )
+                if (
+                    isinstance(item_state_to_remove, dict)
+                    and "item_work_path" in item_state_to_remove
+                ):
+                    # Clean up preview dir if it exists before removing state
+                    item_work_path = item_state_to_remove.get("item_work_path")
+                    if item_work_path:
+                        preview_dir = Path(item_work_path) / "previews"
+                        if preview_dir.exists():
+                            try:
+                                shutil.rmtree(preview_dir)
+                                log_info(
+                                    f"[{batch_job_id}-{item_identifier}] Removed preview clip directory during state removal: {preview_dir}"
+                                )
+                            except OSError as e:
+                                log_warning(
+                                    f"[{batch_job_id}-{item_identifier}] Failed to remove preview clip directory {preview_dir} during state removal: {e}"
+                                )
 
-                del self.labeling_state[batch_job_id][item_identifier]
-                log_info(
-                    f"Removed labeling state for item '{item_identifier}' in batch '{batch_job_id}'."
-                )
+                    del self.labeling_state[batch_job_id][item_identifier]
+                    log_info(
+                        f"Removed labeling state for item '{item_identifier}' in batch '{batch_job_id}'."
+                    )
+                else:
+                    log_warning(
+                        f"Attempted to remove non-item state for '{item_identifier}' in batch '{batch_job_id}'."
+                    )
 
-            if not self.labeling_state[batch_job_id]:  # Remove batch entry if empty
+            # --- Check if only helper keys remain before deleting batch state ---
+            remaining_keys = [
+                k
+                for k in self.labeling_state[batch_job_id].keys()
+                if k.startswith("item_")
+            ]
+            if not remaining_keys:
                 del self.labeling_state[batch_job_id]
-                log_info(f"Removed empty labeling state for batch '{batch_job_id}'.")
+                log_info(
+                    f"Removed empty (or helper-only) labeling state for batch '{batch_job_id}'."
+                )
 
+    # --- prepare_audio_input remains the same ---
     def _prepare_audio_input(
         self,
         input_source: str,
@@ -114,6 +142,12 @@ class Pipeline:
 
         try:
             if input_source.startswith(("http://", "https://")):
+                # --- Make sure transcription module is initialized ---
+                if not hasattr(self, "transcription") or self.transcription is None:
+                    self.transcription = Transcription(
+                        self.config
+                    )  # Re-initialize if needed
+
                 audio_path, metadata = self.transcription.download_audio_from_youtube(
                     input_source, str(item_work_dir), log_file_handle, session_id
                 )
@@ -154,6 +188,7 @@ class Pipeline:
             # Ensure we return None, None on failure
             return None, None
 
+    # --- _run_initial_item_processing remains the same ---
     def _run_initial_item_processing(
         self,
         input_source: str,  # Can be URL or local path
@@ -190,6 +225,11 @@ class Pipeline:
             )  # Ignore return, just log warning
 
             # 3. Run WhisperX
+            # --- Make sure transcription module is initialized ---
+            if not hasattr(self, "transcription") or self.transcription is None:
+                self.transcription = Transcription(
+                    self.config
+                )  # Re-initialize if needed
             log_info(
                 f"[{item_identifier}] Running WhisperX transcription and diarization..."
             )
@@ -215,9 +255,19 @@ class Pipeline:
 
             # 5. Run Multimodal Analysis (Only if segments exist)
             if segments:
+                # --- Ensure multimodal analysis module is initialized ---
+                if not hasattr(self, "mm") or self.mm is None:
+                    log_info(
+                        "Re-initializing MultimodalAnalysis in _run_initial_item_processing..."
+                    )
+                    self.mm = MultimodalAnalysis(self.config)
                 log_info(f"[{item_identifier}] Running multimodal emotion analysis...")
+                # Determine video path - use input_source if URL, else None (or handle local video paths if added later)
+                video_path_for_analysis = (
+                    input_source if input_source.startswith(("http:", "https:")) else ""
+                )  # Pass empty string if local audio
                 segments = self.mm.analyze(
-                    segments, str(audio_path_in_work_dir), input_source
+                    segments, str(audio_path_in_work_dir), video_path_for_analysis
                 )
                 log_info(f"[{item_identifier}] Multimodal analysis complete.")
             else:
@@ -243,6 +293,7 @@ class Pipeline:
             # Return None for segments, but keep audio_path/metadata if available
             return None, audio_path_in_work_dir, metadata
 
+    # --- MODIFIED: Added batch_job_id argument to retrieve flags ---
     def _finalize_batch_item(
         self,
         segments: SegmentsList,
@@ -250,20 +301,35 @@ class Pipeline:
         item_identifier: str,
         item_work_path: Path,
         log_file_handle: TextIO,
-        include_json_summary: bool,
-        include_csv_summary: bool,
-        include_script: bool,
-        include_plots: bool,
+        # --- Removed individual flags, pass batch_job_id instead ---
+        batch_job_id: str,  # NEW: Pass batch ID
         metadata: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, Union[Path, List[Path]]]]:
         """Finalizes a single item: relabels, saves reports, returns file paths."""
-        # (No significant changes needed in this method's internal logic,
-        # it already uses the passed speaker_labels map correctly)
         item_output_dir = item_work_path / "output"
         item_output_dir.mkdir(parents=True, exist_ok=True)
         generated_files_paths: Dict[str, Union[Path, List[Path]]] = {}
 
+        # --- Retrieve output flags from batch state ---
+        output_flags = self.labeling_state.get(batch_job_id, {}).get("output_flags", {})
+        include_json_summary = output_flags.get(
+            "include_json", self.config.get("include_json_summary", True)
+        )
+        include_csv_summary = output_flags.get(
+            "include_csv", self.config.get("include_csv_summary", False)
+        )
+        include_script = output_flags.get(
+            "include_script", self.config.get("include_script_transcript", False)
+        )
+        include_plots = output_flags.get(
+            "include_plots", self.config.get("include_plots", False)
+        )
+        log_info(
+            f"[{item_identifier}] Finalizing with flags: JSON={include_json_summary}, CSV={include_csv_summary}, Script={include_script}, Plots={include_plots}"
+        )
+
         def item_log(level, message):
+            # ... (item_log helper remains the same) ...
             full_message = f"[{item_identifier}] {message}"
             log_func = log_info
             if level == "warning":
@@ -288,10 +354,10 @@ class Pipeline:
                     "warning",
                     "No segments provided for finalization, but proceeding to allow metadata/empty report saving.",
                 )
-                # Initialize segments as empty list to prevent errors below, but allow reports to note this
                 segments = []
 
             # --- Relabeling using provided speaker_labels map ---
+            # (Logic remains the same)
             if speaker_labels:
                 item_log(
                     "info",
@@ -321,6 +387,7 @@ class Pipeline:
                 )
 
             # --- Save Final Structured Transcript ---
+            # (Logic remains the same)
             final_json_name = (
                 f"{item_identifier}_{Path(FINAL_STRUCTURED_TRANSCRIPT_NAME).name}"
             )
@@ -329,7 +396,6 @@ class Pipeline:
                 "info", f"Saving final structured transcript to: {final_json_path}"
             )
             try:
-                # Ensure segments are included even if empty
                 final_output_data: Dict[str, Any] = {
                     "segments": utils.convert_floats(segments if segments else []),
                     "metadata": metadata if metadata is not None else {},
@@ -343,29 +409,30 @@ class Pipeline:
                     "error",
                     f"Failed to save final structured transcript: {e}\n{traceback.format_exc()}",
                 )
-                # Allow continuing to save other reports if this fails
 
             # --- Generate Optional Report Outputs ---
+            # (Logic remains the same, uses flags retrieved above)
             item_log("info", "Generating optional report outputs...")
             try:
-                # Pass potentially empty but relabeled segments list
                 report_outputs = reporting.generate_item_report_outputs(
-                    segments=segments,  # Use potentially relabeled segments
+                    segments=segments,
                     item_identifier=item_identifier,
                     item_output_dir=item_output_dir,
                     config=self.config,
                     log_file_handle=log_file_handle,
-                    include_json_summary=include_json_summary,
-                    include_csv_summary=include_csv_summary,
-                    include_script=include_script,
-                    include_plots=include_plots,
+                    include_json_summary=include_json_summary,  # Use retrieved flag
+                    include_csv_summary=include_csv_summary,  # Use retrieved flag
+                    include_script=include_script,  # Use retrieved flag
+                    include_plots=include_plots,  # Use retrieved flag
                 )
+                generated_report_keys = []
                 for key, path_or_list in report_outputs.items():
                     if path_or_list:
                         generated_files_paths[key] = path_or_list
-                item_log(
-                    "info", f"Generated report outputs: {list(report_outputs.keys())}"
-                )
+                        generated_report_keys.append(
+                            key
+                        )  # Track which files were actually generated
+                item_log("info", f"Generated report outputs: {generated_report_keys}")
             except Exception as e:
                 item_log(
                     "error",
@@ -382,6 +449,7 @@ class Pipeline:
             )
             return None
 
+    # --- create_final_zip remains the same ---
     def create_final_zip(
         self,
         zip_path: Path,
@@ -390,7 +458,6 @@ class Pipeline:
         batch_job_id: Optional[str] = None,
     ) -> Optional[Path]:
         """Creates the final ZIP archive from a dictionary of files."""
-        # (No changes needed in this method)
         log_prefix = f"[{batch_job_id}] " if batch_job_id else ""
         log_info(f"{log_prefix}Attempting to create final ZIP archive: {zip_path}")
 
@@ -418,7 +485,18 @@ class Pipeline:
         try:
             with zipfile.ZipFile(str(temp_zip_path), "w", zipfile.ZIP_DEFLATED) as zf:
                 for arc_name, local_path in files_to_add.items():
-                    if local_path and local_path.is_file():
+                    # Ensure local_path is a Path object
+                    if not isinstance(local_path, Path):
+                        try:
+                            local_path = Path(local_path)
+                        except TypeError:
+                            log_warning(
+                                f"{log_prefix}Invalid path type for archive name '{arc_name}', skipping: {local_path}"
+                            )
+                            files_skipped_count += 1
+                            continue
+
+                    if local_path.is_file():
                         try:
                             zf.write(local_path, arcname=arc_name)
                             files_added_count += 1
@@ -427,14 +505,9 @@ class Pipeline:
                                 f"{log_prefix}Failed to add file {local_path} to zip as {arc_name}: {e}"
                             )
                             files_skipped_count += 1
-                    elif local_path:
-                        log_warning(
-                            f"{log_prefix}File not found or is not a file, skipping: {local_path}"
-                        )
-                        files_skipped_count += 1
                     else:
                         log_warning(
-                            f"{log_prefix}Invalid path for archive name '{arc_name}', skipping."
+                            f"{log_prefix}File not found or is not a file, skipping: {local_path}"
                         )
                         files_skipped_count += 1
 
@@ -467,11 +540,13 @@ class Pipeline:
                     )
             return None
         finally:
+            # Clear tracking AFTER zip attempt (success or fail)
             if batch_job_id and batch_job_id in self.batch_output_files:
                 del self.batch_output_files[batch_job_id]
                 log_info(f"{log_prefix}Cleared output file tracking for batch.")
 
     # --- BATCH PROCESSING ENTRY POINT ---
+    # --- MODIFIED: Store flags in batch state ---
     def process_batch_xlsx(
         self,
         xlsx_filepath: str,
@@ -488,7 +563,6 @@ class Pipeline:
         """
         batch_job_id = f"batch-{datetime.utcnow().strftime('%Y%m%dT%H%M%S%f')[:-3]}"
         log_info(f"[{batch_job_id}] Starting batch processing for: {xlsx_filepath}")
-        # ... (Initial setup: paths, log file, batch_log helper - remains the same) ...
         batch_status_message = f"[{batch_job_id}] Reading batch file..."
         batch_results_list: List[str] = []
         base_temp_dir = Path(self.config.get("temp_dir", "./temp"))
@@ -500,6 +574,7 @@ class Pipeline:
         failed_count = 0
         labeling_is_required_overall = False
 
+        # Initialize tracking for this batch's output files
         self.batch_output_files[batch_job_id] = {}
 
         try:
@@ -507,9 +582,10 @@ class Pipeline:
             batch_log_path = batch_work_path / LOG_FILE_NAME
             log_file_handle = open(batch_log_path, "w", encoding="utf-8")
             log_info(f"[{batch_job_id}] Batch log file created at: {batch_log_path}")
+            # Add the log file itself to the list of files to zip
             self.batch_output_files[batch_job_id][batch_log_path.name] = batch_log_path
 
-            # --- batch_log helper function ---
+            # --- batch_log helper function (remains the same) ---
             def batch_log(level, message):
                 full_message = f"[{batch_job_id}] {message}"
                 log_func = (
@@ -529,8 +605,6 @@ class Pipeline:
                         print(
                             f"WARN: Failed to write to batch log file: {log_e} - Message: {message}"
                         )
-
-            # --- End batch_log helper ---
 
             batch_log("info", f"Batch temporary directory: {batch_work_path}")
             batch_log("info", f"Reading batch file: {xlsx_filepath}")
@@ -562,7 +636,21 @@ class Pipeline:
             )
             batch_log("info", f"Interactive Labeling Enabled: {enable_labeling}")
 
-            self.labeling_state[batch_job_id] = {}  # Initialize state for this batch
+            # --- Initialize state for this batch, including output flags ---
+            self.labeling_state[batch_job_id] = {
+                "output_flags": {
+                    "include_audio": include_source_audio,
+                    "include_json": include_json_summary,
+                    "include_csv": include_csv_summary,
+                    "include_script": include_script_transcript,
+                    "include_plots": include_plots,
+                },
+                "items_requiring_labeling_order": [],  # Initialize empty list for item order
+            }
+            batch_log(
+                "info",
+                f"Stored output flags for batch: {self.labeling_state[batch_job_id]['output_flags']}",
+            )
 
             # --- Item Processing Loop ---
             items_requiring_labeling_list = []  # Keep track of items needing labeling
@@ -599,8 +687,7 @@ class Pipeline:
                     source_url_or_path, item_work_path, log_file_handle, item_identifier
                 )
 
-                # Check if initial processing failed critically (audio prep)
-                if audio_path is None and segments is None:  # Audio prep likely failed
+                if audio_path is None and segments is None:
                     batch_log(
                         "error",
                         f"[{item_identifier}] Critical failure during initial processing (likely audio prep).",
@@ -614,12 +701,10 @@ class Pipeline:
                 # --- Check if Labeling Needed ---
                 needs_labeling = False
                 eligible_speakers = []
-                if (
-                    enable_labeling and is_youtube_url and segments
-                ):  # Only if segments exist
+                if enable_labeling and is_youtube_url and segments:
                     eligible_speakers = speaker_labeling.identify_eligible_speakers(
                         segments, labeling_min_total_time, labeling_min_block_time
-                    )  # Gets sorted list
+                    )
                     if eligible_speakers:
                         needs_labeling = True
                         labeling_is_required_overall = True
@@ -627,23 +712,23 @@ class Pipeline:
                         batch_results_list.append(
                             f"[{item_identifier}] Success (Pending Labeling)."
                         )
-                        items_requiring_labeling_list.append(
-                            item_identifier
-                        )  # Add to list for UI
+                        items_requiring_labeling_list.append(item_identifier)
                         batch_log(
                             "info",
                             f"[{item_identifier}] Item requires interactive labeling for speakers: {eligible_speakers}.",
                         )
 
+                        # Store item state under the batch ID
                         self.labeling_state[batch_job_id][item_identifier] = {
                             "youtube_url": source_url_or_path,
                             "segments": segments,
-                            "eligible_speakers": eligible_speakers,  # Store sorted list
+                            "eligible_speakers": eligible_speakers,
                             "collected_labels": {},
                             "audio_path": audio_path,
                             "metadata": metadata,
                             "item_work_path": item_work_path,
                         }
+                        # Add source audio to zip list *if* pending labeling and flag is true
                         if include_source_audio and audio_path and audio_path.is_file():
                             self.batch_output_files[batch_job_id][
                                 f"{item_identifier}/{audio_path.name}"
@@ -669,18 +754,14 @@ class Pipeline:
                     batch_log(
                         "info", f"[{item_identifier}] Finalizing item immediately."
                     )
+                    # --- Pass batch_job_id to retrieve flags ---
                     generated_files = self._finalize_batch_item(
-                        segments=segments
-                        if segments
-                        else [],  # Pass empty list if None
+                        segments=segments if segments else [],
                         speaker_labels={},
                         item_identifier=item_identifier,
                         item_work_path=item_work_path,
                         log_file_handle=log_file_handle,
-                        include_json_summary=include_json_summary,
-                        include_csv_summary=include_csv_summary,
-                        include_script=include_script_transcript,
-                        include_plots=include_plots,
+                        batch_job_id=batch_job_id,  # Pass batch ID here
                         metadata=metadata,
                     )
 
@@ -698,9 +779,11 @@ class Pipeline:
                         batch_results_list.append(
                             f"[{item_identifier}] Success (Finalized)."
                         )
+                        # Add generated files to zip list
                         if batch_job_id in self.batch_output_files:
                             arc_folder_base = item_identifier
                             for key, path_or_list in generated_files.items():
+                                # Determine the correct subfolder in the zip
                                 arc_folder = (
                                     f"{arc_folder_base}/plots"
                                     if key == "plot_paths"
@@ -710,17 +793,21 @@ class Pipeline:
                                     path_or_list, list
                                 ):
                                     for p_path in path_or_list:
-                                        if p_path and p_path.is_file():
+                                        if (
+                                            isinstance(p_path, Path)
+                                            and p_path.is_file()
+                                        ):  # Check type and existence
                                             self.batch_output_files[batch_job_id][
                                                 f"{arc_folder}/{p_path.name}"
                                             ] = p_path
                                 elif (
                                     isinstance(path_or_list, Path)
                                     and path_or_list.is_file()
-                                ):
+                                ):  # Check type and existence
                                     self.batch_output_files[batch_job_id][
                                         f"{arc_folder}/{path_or_list.name}"
                                     ] = path_or_list
+                            # Add source audio if needed
                             if (
                                 include_source_audio
                                 and audio_path
@@ -730,8 +817,9 @@ class Pipeline:
                                     f"{arc_folder_base}/{audio_path.name}"
                                 ] = audio_path
                         else:
-                            log_warning(
-                                f"[{item_identifier}] Cannot add output files to zip collection - batch ID '{batch_job_id}' not found."
+                            batch_log(
+                                "warning",
+                                f"[{item_identifier}] Cannot add output files to zip collection - batch ID '{batch_job_id}' not found.",
                             )
 
                 batch_log(
@@ -739,6 +827,12 @@ class Pipeline:
                     f"--- Finished item {item_index}/{total_items} ({item_identifier}) ---",
                 )
             # --- End of Item Loop ---
+
+            # Store the order of items needing labeling in the batch state
+            if labeling_is_required_overall and batch_job_id in self.labeling_state:
+                self.labeling_state[batch_job_id]["items_requiring_labeling_order"] = (
+                    items_requiring_labeling_list
+                )
 
             total_processed_or_pending = (
                 processed_immediately_count + pending_labeling_count
@@ -761,14 +855,8 @@ class Pipeline:
             # --- Determine Final Status Message ---
             if labeling_is_required_overall:
                 batch_status_message = f"[{batch_job_id}] Initial processing complete. {pending_labeling_count} item(s) require speaker labeling via the UI."
-                # Update state for the items needing labeling (just ensure it's set)
-                if batch_job_id in self.labeling_state:
-                    self.labeling_state[batch_job_id][
-                        "items_requiring_labeling_order"
-                    ] = items_requiring_labeling_list
                 return_batch_id = batch_job_id
             else:
-                # No labeling needed -> create zip now
                 batch_log(
                     "info", f"No interactive labeling required. Creating final ZIP."
                 )
@@ -785,10 +873,13 @@ class Pipeline:
                     batch_status_message = f"[{batch_job_id}] ✅ Batch processing complete. Download ready: {created_zip_path}"
                 else:
                     batch_status_message = f"[{batch_job_id}] ❗️ Batch processing finished, but failed to create final ZIP bundle."
-                return_batch_id = None
+                return_batch_id = (
+                    None  # No labeling, so no batch ID needed for UI state
+                )
 
             batch_log("info", f"Batch Status: {batch_status_message}")
 
+        # --- Exception Handling and Finally Block (remain largely the same) ---
         except (FileNotFoundError, ValueError, RuntimeError) as e:
             err_msg = f"[{batch_job_id}] ERROR: {e}"
             batch_log("error", err_msg)
@@ -812,11 +903,9 @@ class Pipeline:
             if (
                 log_file_handle
                 and not log_file_handle.closed
-                and not labeling_is_required_overall
+                and not labeling_is_required_overall  # Close log only if NOT pending labeling
             ):
-                log_info(
-                    f"[{batch_job_id}] Closing batch log file (no labeling required)."
-                )
+                batch_log("info", f"Closing batch log file (no labeling required).")
                 log_file_handle.close()
             elif (
                 log_file_handle
@@ -829,9 +918,15 @@ class Pipeline:
 
             cleanup_temp = self.config.get("cleanup_temp_on_success", True)
             batch_succeeded_without_labeling = (
-                "✅" in batch_status_message
-            ) and not labeling_is_required_overall
-            should_cleanup = cleanup_temp and batch_succeeded_without_labeling
+                (
+                    "✅" in batch_status_message or "❗️" in batch_status_message
+                )  # Check for success OR zip failure
+                and not labeling_is_required_overall
+            )
+            # Cleanup if configured AND (batch succeeded without labeling OR batch failed entirely)
+            should_cleanup = cleanup_temp and (
+                batch_succeeded_without_labeling or return_batch_id is None
+            )
 
             if batch_work_path.exists():
                 if should_cleanup:
@@ -843,7 +938,13 @@ class Pipeline:
                         shutil.rmtree(batch_work_path)
                         batch_log("info", f"Successfully removed batch temp directory.")
                     except OSError as e:
-                        batch_log(
+                        # Use batch_log helper if available, else print
+                        log_func = (
+                            batch_log
+                            if log_file_handle and not log_file_handle.closed
+                            else print
+                        )
+                        log_func(
                             "warning",
                             f"Failed to remove batch temporary directory {batch_work_path}: {e}",
                         )
@@ -852,10 +953,10 @@ class Pipeline:
                         "info",
                         f"Keeping temporary directory for interactive labeling: {batch_work_path}",
                     )
-                else:
+                else:  # Keep on other errors if not cleaning up on success
                     batch_log(
                         "warning",
-                        f"Skipping cleanup of temporary directory due to errors, pending labeling, or config: {batch_work_path}",
+                        f"Skipping cleanup of temporary directory due to errors or config: {batch_work_path}",
                     )
             # --- End Finally Block ---
 
@@ -871,8 +972,7 @@ class Pipeline:
         )
         return batch_status_message, results_summary_string, return_batch_id
 
-    # --- NEW INTERFACE FUNCTIONS for UI ---
-
+    # --- start_interactive_labeling_for_item remains the same ---
     def start_interactive_labeling_for_item(
         self, batch_job_id: str, item_identifier: str
     ) -> Optional[
@@ -892,10 +992,10 @@ class Pipeline:
 
         if not eligible_speakers:
             log_warning(
-                f"[{batch_job_id}-{item_identifier}] No eligible speakers found in state."
+                f"[{batch_job_id}-{item_identifier}] No eligible speakers found in state. Attempting to finalize."
             )
             self.finalize_labeled_item(batch_job_id, item_identifier)  # Try finalize
-            self._remove_item_state(batch_job_id, item_identifier)
+            # No need to remove state here, finalize_labeled_item does it
             return None
         if not youtube_url:
             log_error(
@@ -932,6 +1032,7 @@ class Pipeline:
         # No download needed, just return speaker, URL, and start times
         return first_speaker_id, youtube_url, start_times
 
+    # --- store_speaker_label remains the same ---
     def store_speaker_label(
         self, batch_job_id: str, item_identifier: str, speaker_id: str, user_label: str
     ) -> bool:
@@ -948,6 +1049,7 @@ class Pipeline:
         )
         return True
 
+    # --- get_next_speaker_for_labeling remains the same ---
     def get_next_speaker_for_labeling(
         self, batch_job_id: str, item_identifier: str, current_speaker_index: int
     ) -> Optional[
@@ -1000,6 +1102,7 @@ class Pipeline:
             )
             return None  # Signal item completion
 
+    # --- MODIFIED: Pass batch_job_id to _finalize_batch_item ---
     def finalize_labeled_item(
         self, batch_job_id: str, item_identifier: str
     ) -> Optional[Dict[str, Any]]:
@@ -1010,25 +1113,25 @@ class Pipeline:
             log_error(
                 f"[{batch_job_id}-{item_identifier}] Cannot finalize - item state not found."
             )
+            # Since state is gone, we can't really finalize. Return None.
+            # Attempting to remove state again is harmless but redundant.
             return None
 
         segments = item_state.get("segments")
-        collected_labels = item_state.get(
-            "collected_labels", {}
-        )  # Use labels collected so far
-        item_work_path = item_state.get("item_work_path")
+        collected_labels = item_state.get("collected_labels", {})
+        item_work_path_obj = item_state.get("item_work_path")  # Use obj suffix
         metadata = item_state.get("metadata")
-        audio_path = item_state.get("audio_path")
+        audio_path_obj = item_state.get("audio_path")  # Use obj suffix
 
-        if not item_work_path:  # Segments can be empty/None now
+        if not item_work_path_obj or not isinstance(item_work_path_obj, Path):
             log_error(
-                f"[{batch_job_id}-{item_identifier}] Cannot finalize - missing work path in state."
+                f"[{batch_job_id}-{item_identifier}] Cannot finalize - missing or invalid work path in state."
             )
             self._remove_item_state(batch_job_id, item_identifier)
             return None
 
-        # Need log file handle
-        batch_work_dir = item_work_path.parent
+        # Need log file handle (ensure batch dir exists for appending)
+        batch_work_dir = item_work_path_obj.parent
         log_file_path = batch_work_dir / LOG_FILE_NAME
         log_handle = None
         generated_files: Optional[Dict[str, Any]] = None
@@ -1036,16 +1139,14 @@ class Pipeline:
             batch_work_dir.mkdir(parents=True, exist_ok=True)
             log_handle = open(log_file_path, "a", encoding="utf-8")
 
+            # --- Pass batch_job_id here ---
             generated_files = self._finalize_batch_item(
-                segments=segments if segments else [],  # Handle None segments case
-                speaker_labels=collected_labels,  # Pass potentially partial labels
+                segments=segments if segments else [],
+                speaker_labels=collected_labels,
                 item_identifier=item_identifier,
-                item_work_path=item_work_path,
+                item_work_path=item_work_path_obj,  # Pass Path object
                 log_file_handle=log_handle,
-                include_json_summary=self.config.get("include_json_summary", True),
-                include_csv_summary=self.config.get("include_csv_summary", False),
-                include_script=self.config.get("include_script_transcript", False),
-                include_plots=self.config.get("include_plots", False),
+                batch_job_id=batch_job_id,  # Pass batch ID here
                 metadata=metadata,
             )
 
@@ -1060,28 +1161,44 @@ class Pipeline:
                     )
                     if key == "plot_paths" and isinstance(path_or_list, list):
                         for p_path in path_or_list:
-                            if p_path and p_path.is_file():
+                            if (
+                                isinstance(p_path, Path) and p_path.is_file()
+                            ):  # Check type and existence
                                 self.batch_output_files[batch_job_id][
                                     f"{arc_folder}/{p_path.name}"
                                 ] = p_path
-                    elif isinstance(path_or_list, Path) and path_or_list.is_file():
+                    elif (
+                        isinstance(path_or_list, Path) and path_or_list.is_file()
+                    ):  # Check type and existence
                         self.batch_output_files[batch_job_id][
                             f"{arc_folder}/{path_or_list.name}"
                         ] = path_or_list
-                include_source_audio = self.config.get("include_source_audio", True)
-                if include_source_audio and audio_path and audio_path.is_file():
-                    if (
-                        f"{arc_folder_base}/{audio_path.name}"
-                        not in self.batch_output_files[batch_job_id]
-                    ):
-                        self.batch_output_files[batch_job_id][
-                            f"{arc_folder_base}/{audio_path.name}"
-                        ] = audio_path
+
+                # Retrieve the include_audio flag specific to this batch run
+                batch_flags = self.labeling_state.get(batch_job_id, {}).get(
+                    "output_flags", {}
+                )
+                include_source_audio = batch_flags.get(
+                    "include_audio", self.config.get("include_source_audio", True)
+                )
+
+                if (
+                    include_source_audio
+                    and audio_path_obj
+                    and isinstance(audio_path_obj, Path)
+                    and audio_path_obj.is_file()
+                ):
+                    # Check if it's already added (might happen during initial processing if pending)
+                    audio_arc_name = f"{arc_folder_base}/{audio_path_obj.name}"
+                    if audio_arc_name not in self.batch_output_files[batch_job_id]:
+                        self.batch_output_files[batch_job_id][audio_arc_name] = (
+                            audio_path_obj
+                        )
             elif not generated_files:
                 log_error(
                     f"[{batch_job_id}-{item_identifier}] Finalization process failed."
                 )
-            else:
+            else:  # generated_files is not None, but batch_job_id might be missing (shouldn't happen)
                 log_warning(
                     f"[{batch_job_id}-{item_identifier}] Cannot add output files - batch ID not found in tracking."
                 )
@@ -1098,7 +1215,7 @@ class Pipeline:
 
         return generated_files
 
-    # --- NEW: Function to handle skipping the rest of an item ---
+    # --- skip_labeling_for_item remains the same ---
     def skip_labeling_for_item(self, batch_job_id: str, item_identifier: str) -> bool:
         """
         Skips labeling for remaining speakers in an item and finalizes it
@@ -1108,22 +1225,31 @@ class Pipeline:
             f"[{batch_job_id}-{item_identifier}] User requested to skip remaining speakers."
         )
         # The finalization process automatically uses current labels and removes state.
-        # We just need to call finalize_labeled_item.
         result = self.finalize_labeled_item(batch_job_id, item_identifier)
-        return result is not None  # Return True if finalization seemed to work
+        return result is not None
 
+    # --- MODIFIED: Refined completion check ---
     def check_batch_completion_and_zip(self, batch_job_id: str) -> Optional[Path]:
         """
         Checks if all items requiring labeling are done. If so, creates final zip.
         """
-        # Check if the batch ID still exists in the labeling state AND has items
-        if batch_job_id in self.labeling_state and self.labeling_state[batch_job_id]:
-            log_info(
-                f"[{batch_job_id}] Batch labeling not yet complete. Items remaining: {list(self.labeling_state[batch_job_id].keys())}"
-            )
+        batch_state = self.labeling_state.get(batch_job_id)
+
+        # Check if batch state exists and if any actual item keys are left
+        items_remaining = False
+        if batch_state:
+            # Check for keys that represent items (e.g., start with "item_")
+            item_keys_present = [k for k in batch_state.keys() if k.startswith("item_")]
+            if item_keys_present:
+                items_remaining = True
+                log_info(
+                    f"[{batch_job_id}] Batch labeling not yet complete. Items remaining: {item_keys_present}"
+                )
+
+        if items_remaining:
             return None  # Not complete
 
-        # Otherwise, batch state is gone or empty -> Finalize
+        # Otherwise, batch state is gone or has no item keys left -> Finalize
         log_info(
             f"[{batch_job_id}] All items finalized or batch complete. Proceeding with ZIP creation."
         )
@@ -1132,15 +1258,10 @@ class Pipeline:
         log_handle = None
         zip_path: Optional[Path] = None
         try:
+            # Ensure batch work dir exists before trying to open log for appending
             batch_work_path.mkdir(parents=True, exist_ok=True)
-            # Check if log file exists before opening in append mode
-            if log_file_path.exists():
-                log_handle = open(log_file_path, "a", encoding="utf-8")
-            else:  # If log somehow missing, open in write mode
-                log_handle = open(log_file_path, "w", encoding="utf-8")
-                log_info(
-                    f"[{batch_job_id}] Recreated missing log file for final zip log."
-                )
+            # Open log in append mode ('a') to add zip messages
+            log_handle = open(log_file_path, "a", encoding="utf-8")
 
             permanent_output_dir = Path(self.config.get("output_dir", "./output"))
             master_zip_name = f"{batch_job_id}_batch_results{FINAL_ZIP_SUFFIX}"
@@ -1162,8 +1283,14 @@ class Pipeline:
                         f"[{batch_job_id}] Successfully removed batch temp directory."
                     )
                 except OSError as e:
-                    log_warning(
-                        f"[{batch_job_id}] Failed to remove batch temporary directory {batch_work_path}: {e}"
+                    # Use log_handle if available for logging cleanup error
+                    log_func = (
+                        log_handle.write
+                        if log_handle and not log_handle.closed
+                        else print
+                    )
+                    log_func(
+                        f"WARNING: Failed to remove batch temporary directory {batch_work_path}: {e}\n"
                     )
             elif zip_path and not cleanup_temp:
                 log_info(
@@ -1178,12 +1305,14 @@ class Pipeline:
             log_error(
                 f"[{batch_job_id}] Error during final zip creation or cleanup check: {e}\n{traceback.format_exc()}"
             )
+            if log_handle and not log_handle.closed:
+                log_handle.write(f"ERROR: Error during final zip creation: {e}\n")
         finally:
             if log_handle and not log_handle.closed:
                 log_handle.close()
-            # Clean up state just in case
+            # Clean up batch state if it still exists (e.g., only helper keys left)
             if batch_job_id in self.labeling_state:
                 del self.labeling_state[batch_job_id]
-            # Note: batch_output_files is cleaned up in create_final_zip
+            # Note: batch_output_files is cleaned up within create_final_zip
 
         return zip_path

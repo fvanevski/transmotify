@@ -288,39 +288,54 @@ class Transcription:
                 "--",
                 youtube_url,
             ]
+
+            # --- MODIFICATION HERE: Pass None for log_file_handle ---
+            # This prevents the large JSON output from being written to the log file,
+            # but capture_output=True still returns the string for parsing.
             metadata_output = safe_run(
                 metadata_command,
-                log_file_handle,
+                None,  # <--- CHANGE THIS from log_file_handle to None
                 session_id,
                 capture_output=True,  # Capture stdout
             )
 
             metadata: Dict[str, Any] = {}
-            if (
-                metadata_output
-            ):  # safe_run now returns the output string if capture_output is True
+            if metadata_output:
                 try:
-                    video_info = json.loads(
-                        metadata_output
-                    )  # Load from the returned string
-                    # Extract required fields, providing defaults for safety
+                    # Log that we received *some* output before parsing
+                    log_info(
+                        f"[{session_id}] Received metadata output from yt-dlp (length: {len(metadata_output)}). Parsing..."
+                    )
+                    video_info = json.loads(metadata_output)
+                    # Extract required fields
                     metadata = {
-                        "youtube_url": youtube_url,  # Include the URL itself
-                        "video_title": video_info.get("fulltitle"),
+                        "youtube_url": youtube_url,
+                        "video_title": video_info.get(
+                            "fulltitle"
+                        ),  # Changed from title to fulltitle for consistency
                         "video_description": video_info.get("description"),
                         "video_uploader": video_info.get("uploader"),
-                        "video_creators": video_info.get(
-                            "creators"
-                        ),  # This might be a list or None
+                        "video_creators": video_info.get("creators"),
                         "upload_date": video_info.get("upload_date"),  # Format YYYYMMDD
+                        # Use release_timestamp if available for more precise date/time?
+                        # Or keep release_date if preferred format
                         "release_date": video_info.get(
                             "release_date"
-                        ),  # Format YYYY-MM-DD
+                        ),  # Format YYYYMMDD or similar
+                        # Optional: add duration if needed elsewhere
+                        # "duration": video_info.get("duration"),
+                        # "duration_string": video_info.get("duration_string"),
                     }
-                    log_info(f"[{session_id}] Metadata fetched successfully.")
+                    log_info(
+                        f"[{session_id}] Metadata fetched and parsed successfully."
+                    )
                 except json.JSONDecodeError as e:
                     log_error(
                         f"[{session_id}] Failed to decode yt-dlp metadata JSON: {e}"
+                    )
+                    # Log the beginning of the problematic output for debugging, avoid logging the whole potentially huge string
+                    log_error(
+                        f"[{session_id}] Start of problematic metadata output: {metadata_output[:500]}..."
                     )
                     metadata = {
                         "youtube_url": youtube_url,
@@ -330,12 +345,13 @@ class Transcription:
                     log_error(
                         f"[{session_id}] Unexpected error processing metadata: {e}"
                     )
+                    log_error(traceback.format_exc())
                     metadata = {
                         "youtube_url": youtube_url,
                         "error": f"Unexpected metadata error: {e}",
                     }
             else:
-                log_warning(f"[{session_id}] No metadata output from yt-dlp.")
+                log_warning(f"[{session_id}] No metadata output captured from yt-dlp.")
                 metadata = {
                     "youtube_url": youtube_url,
                     "warning": "No metadata output from yt-dlp",
