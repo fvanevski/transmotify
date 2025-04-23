@@ -357,6 +357,7 @@ class Pipeline:
         files_to_add: Dict[str, Path],
         log_file_handle: Optional[TextIO] = None,
         batch_job_id: Optional[str] = None,
+        include_source_audio: bool = True,  # Add include_source_audio parameter
     ) -> Optional[Path]:
         # (No changes to this method's logic, relies on imported os)
         log_prefix = f"[{batch_job_id}] " if batch_job_id else ""
@@ -425,8 +426,15 @@ class Pipeline:
                     )
             return None
 
-    def process_batch_xlsx(self, xlsx_filepath: str) -> Tuple[str, str]:
-        # (No changes to this method's logic, relies on imported datetime)
+    def process_batch_xlsx(
+        self,
+        xlsx_filepath: str,
+        include_source_audio: bool,
+        include_json_summary: bool,
+        include_csv_summary: bool,
+        include_script_transcript: bool,
+        include_plots: bool,
+    ) -> Tuple[str, str]:
         batch_job_id = f"batch-{datetime.utcnow().strftime('%Y%m%dT%H%M%S%f')[:-3]}"
         log_info(f"[{batch_job_id}] Starting batch processing for: {xlsx_filepath}")
         batch_status_message = f"[{batch_job_id}] Reading batch file..."
@@ -492,15 +500,10 @@ class Pipeline:
                 log_info(
                     f"Note: Snippet column '{snippet_col_name}' found but will be ignored."
                 )
-            # Read flags from config
-            include_json_summary = self.config.get("include_json_summary", True)
-            include_csv_summary = self.config.get("include_csv_summary", False)
-            include_script = self.config.get("include_script_transcript", False)
-            include_plots = self.config.get("include_plots", False)
-            include_audio_in_zip = self.config.get("include_source_audio", True)
+            # Removed reading flags from config, now using function arguments
             batch_log(
                 "info",
-                f"Optional outputs - JSON Summary: {include_json_summary}, CSV Summary: {include_csv_summary}, Script: {include_script}, Plots: {include_plots}, Source Audio: {include_audio_in_zip}",
+                f"Optional outputs - JSON Summary: {include_json_summary}, CSV Summary: {include_csv_summary}, Script: {include_script_transcript}, Plots: {include_plots}, Source Audio: {include_source_audio}",
             )
             for sequential_index, (index, row) in enumerate(df.iterrows()):
                 item_index = sequential_index + 1
@@ -546,7 +549,7 @@ class Pipeline:
                     log_file_handle=log_file_handle,
                     include_json_summary=include_json_summary,
                     include_csv_summary=include_csv_summary,
-                    include_script=include_script,
+                    include_script=include_script_transcript,  # Use the argument name
                     include_plots=include_plots,
                     metadata=metadata,  # Pass metadata to finalization
                 )
@@ -576,7 +579,8 @@ class Pipeline:
                     elif isinstance(path_or_list, Path) and path_or_list.is_file():
                         f_path = path_or_list
                         all_output_files_for_zip[f"{arc_folder}/{f_path.name}"] = f_path
-                if include_audio_in_zip and audio_path.is_file():
+                # Logic for including audio in zip moved to create_final_zip
+                if include_source_audio and audio_path and audio_path.is_file():
                     all_output_files_for_zip[f"{item_identifier}/{audio_path.name}"] = (
                         audio_path
                     )
@@ -595,7 +599,11 @@ class Pipeline:
             master_zip_path = permanent_output_dir / master_zip_name
             batch_log("info", f"Creating master ZIP bundle: {master_zip_path}")
             created_zip_path = self.create_final_zip(
-                master_zip_path, all_output_files_for_zip, log_file_handle, batch_job_id
+                master_zip_path,
+                all_output_files_for_zip,
+                log_file_handle,
+                batch_job_id,
+                include_source_audio,  # Pass include_source_audio
             )
             if created_zip_path:
                 batch_status_message = f"[{batch_job_id}] ✅ Batch processing complete. Download ready: {created_zip_path}"

@@ -11,6 +11,7 @@ from pathlib import Path
 from collections import Counter, defaultdict
 import statistics
 from typing import Dict, List, Any, Optional, Tuple, TextIO
+from datetime import datetime, timezone  # Import datetime and timezone
 
 # Logging imports
 from .logging import log_info, log_warning, log_error
@@ -229,13 +230,19 @@ def save_emotion_summary(
                     row_data = {"speaker": speaker_id}
                     # Add standard fields
                     row_data.update(
-                        {h: data.get(h) for h in standard_headers if h != "speaker"}
+                        {
+                            h: str(data.get(h) if data.get(h) is not None else "")
+                            for h in standard_headers
+                            if h != "speaker"
+                        }  # Convert to string, handle None
                     )
                     # Add emotion counts, prefixing keys with 'count_'
                     emotion_counts = data.get("emotion_counts", {})
                     row_data.update(
                         {
-                            f"count_{emo}": emotion_counts.get(emo, 0)
+                            f"count_{emo}": str(
+                                emotion_counts.get(emo, 0)
+                            )  # Convert to string
                             for emo in all_emotion_count_keys
                         }
                     )
@@ -244,7 +251,9 @@ def save_emotion_summary(
                     for key in ["emotion_volatility", "emotion_score_mean"]:
                         if key in row_data and row_data[key] is not None:
                             try:
-                                row_data[key] = round(float(row_data[key]), 4)
+                                row_data[key] = str(
+                                    round(float(row_data[key]), 4)
+                                )  # Convert rounded float to string
                             except:
                                 pass  # Ignore errors if value isn't float
 
@@ -372,8 +381,16 @@ def generate_item_report_outputs(
     if include_script:
         report_log("info", "Generating script transcript...")
         try:
+            script_filename = f"{item_identifier}_script.txt"
+            script_filepath = item_output_dir / script_filename
+            report_log(
+                "info", f"Saving script transcript to: {script_filepath}"
+            )  # Add log for clarity
             script_path = save_script_transcript(
-                segments, item_output_dir, item_identifier
+                segments,
+                script_filepath,
+                item_identifier,
+                log_file_handle,  # Pass the file path and log handle
             )
             generated_files["script_path"] = script_path
             if not script_path:

@@ -58,6 +58,24 @@ class UI:
                         label="Batch Results", interactive=False, lines=5
                     )
 
+                with gr.Column():
+                    gr.Markdown("## Output Options")
+                    include_source_audio_checkbox = gr.Checkbox(
+                        label="Include Source Audio", value=True
+                    )
+                    include_json_summary_checkbox = gr.Checkbox(
+                        label="Include Granular Emotion Summary JSON", value=True
+                    )
+                    include_csv_summary_checkbox = gr.Checkbox(
+                        label="Include Overall Emotion Summary CSV", value=False
+                    )
+                    include_script_transcript_checkbox = gr.Checkbox(
+                        label="Include Simple Script", value=False
+                    )
+                    include_plots_checkbox = gr.Checkbox(
+                        label="Include Plots", value=False
+                    )
+
             # --- Wrapper Functions for Button Clicks ---
 
             # Removed parse_speaker_snippets as it's now handled in core/utils
@@ -68,6 +86,11 @@ class UI:
             # Updated type hint to Generator
             def process_batch_wrapper(
                 xlsx_file_obj: Optional[str],
+                include_source_audio: bool,
+                include_json_summary: bool,
+                include_csv_summary: bool,
+                include_script_transcript: bool,
+                include_plots: bool,
             ) -> Generator[Tuple[str, str], Any, Any]:
                 """Handles the batch processing from an Excel file."""
                 batch_status = "Starting batch processing..."
@@ -82,7 +105,14 @@ class UI:
                     # --- Call the actual pipeline's batch processing method ---
                     # This will read the xlsx, process each item, and generate results
                     batch_status_message, batch_results_summary = (
-                        self.pipeline.process_batch_xlsx(xlsx_file_obj)
+                        self.pipeline.process_batch_xlsx(
+                            xlsx_file_obj,
+                            include_source_audio,
+                            include_json_summary,
+                            include_csv_summary,
+                            include_script_transcript,
+                            include_plots,
+                        )
                     )
 
                     batch_status = batch_status_message  # Use the status message returned by the pipeline
@@ -107,7 +137,14 @@ class UI:
             # ADDED: Batch Process Button Click
             batch_process_btn.click(
                 fn=process_batch_wrapper,
-                inputs=[batch_input_file],
+                inputs=[
+                    batch_input_file,
+                    include_source_audio_checkbox,
+                    include_json_summary_checkbox,
+                    include_csv_summary_checkbox,
+                    include_script_transcript_checkbox,
+                    include_plots_checkbox,
+                ],
                 outputs=[batch_status_output, batch_download_output],
             )
 
