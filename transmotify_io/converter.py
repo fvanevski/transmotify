@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Final, Optional
 
 from core.logging import get_logger
-from transmotify_io.converter import ConverterError
 from utils.subprocess import run as _run
 
 logger = get_logger(__name__)
