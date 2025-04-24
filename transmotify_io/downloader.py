@@ -91,7 +91,7 @@ def download_youtube(
         Optional directory for intermediate files; defaults to ``cfg.temp_dir``.
 
     Returns
-    -------
+    ------
     (wav_path, metadata)
         ``wav_path`` is a Path to the converted WAV file; ``metadata`` is a dict
         with keys like ``video_title``, ``upload_date`` etc.
@@ -123,32 +123,42 @@ def download_youtube(
     logger.info("%s yt-dlp starting download for %s", session, url)
     downloaded_file_path = None
     try:
-        # Run without stream callback, capture output to find filename
-        output = run(cmd, capture_output=True)
-        # Find the actual downloaded file name (yt-dlp doesn't make this easy when quiet)
-        # We'll determine it after conversion, or rely on converter finding it.
+        # Run yt-dlp
+        run(cmd, capture_output=True) # Keep capture_output=True to potentially catch errors
 
-        # Simple way: Find the first file matching the pattern
-        # This assumes only one file is downloaded per session, which should be true
+        # Determine the actual downloaded file path more robustly
         potential_files = list(tmp_dir.glob(f"audio_{session}.*"))
-        # Exclude the target WAV file if it somehow exists already
-        potential_files = [f for f in potential_files if f.suffix != '.wav']
-        if not potential_files:
-             raise FileNotFoundError(f"Could not find downloaded audio file matching pattern audio_{session}.* in {tmp_dir}")
-        downloaded_file_path = potential_files[0]
-        logger.info("%s yt-dlp downloaded %s", session, downloaded_file_path.name)
+        # Exclude the target WAV file
+        potential_files = [f for f in potential_files if f.suffix.lower() != '.wav']
+
+        if len(potential_files) == 1:
+            downloaded_file_path = potential_files[0]
+            logger.info("%s yt-dlp downloaded %s", session, downloaded_file_path.name)
+        elif len(potential_files) > 1:
+            # Handle ambiguity - maybe log a warning and pick the first?
+            downloaded_file_path = potential_files[0]
+            logger.warning("%s Found multiple potential downloads (%s), using %s",
+                           session, [f.name for f in potential_files], downloaded_file_path.name)
+        else:
+             # File not found via glob, raise error
+             raise FileNotFoundError(f"Could not find downloaded audio file matching pattern audio_{session}.* in {tmp_dir} after yt-dlp run.")
 
     except SubprocessError as e:
-        raise RuntimeError(f"yt-dlp download failed ({e})") from e
+        # Log the actual error from yt-dlp
+        logger.error("%s yt-dlp download failed. Command: %s", session, " ".join(cmd))
+        logger.error("%s yt-dlp stderr: %s", session, e.stderr)
+        raise RuntimeError(f"yt-dlp download failed (see logs for details)") from e
     except FileNotFoundError as e:
+         logger.error("%s Failed to locate downloaded file: %s", session, e)
          raise e # Re-raise specific error
     except Exception as e:
-        # Catch other potential errors during file finding
-        raise RuntimeError(f"Error finding downloaded file for {session}: {e}") from e
+        logger.error("%s Unexpected error during download or file finding for %s: %s", session, url, e, exc_info=True)
+        raise RuntimeError(f"Error processing download for {session}: {e}") from e
 
-
+    # This check becomes redundant if FileNotFoundError is raised above, but kept for safety
     if not downloaded_file_path or not downloaded_file_path.exists():
-        raise FileNotFoundError(f"yt-dlp claims success but downloaded file {downloaded_file_path} is missing")
+        raise FileNotFoundError(f"Downloaded file {downloaded_file_path} is missing after checks")
+
 
     # ------------------------------------------------------------------
     # 2. Convert → WAV (delegated)

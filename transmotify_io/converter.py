@@ -16,17 +16,17 @@ from utils.subprocess import run as _run
 
 logger = get_logger(__name__)
 
+# Updated __all__ to include extract_audio_segment
 __all__: Final = [
     "ConverterError",
     "convert_to_wav",
     "duration_ok",
+    "extract_audio_segment",
 ]
 
 
 class ConverterError(RuntimeError):
     """Raised when ffmpeg/ffprobe operations fail."""
-
-
 
 
 def duration_ok(audio: Path, *, min_sec: float = 5.0) -> bool:
@@ -62,34 +62,67 @@ def duration_ok(audio: Path, *, min_sec: float = 5.0) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# ffmpeg conversion
+# ffmpeg conversion and extraction
 # ---------------------------------------------------------------------------
-
 
 def _ffmpeg_to_wav(src: Path, dst: Path, *, channels: int, rate: int) -> None:
     """Invoke ffmpeg to convert *src* → *dst* WAV."""
     cmd = [
         "ffmpeg",
-        "-y",
+        "-y", # Overwrite output without asking
         "-i",
         str(src),
-        "-ac",
+        "-ac", # Audio channels
         str(channels),
-        "-ar",
+        "-ar", # Audio sample rate
         str(rate),
-        "-vn",
+        "-vn", # No video
         str(dst),
     ]
     try:
         _run(cmd)
     except Exception as exc:  # noqa: BLE001
-        raise ConverterError(f"ffmpeg failed: {exc}") from exc
+        raise ConverterError(f"ffmpeg WAV conversion failed: {exc}") from exc
+
+
+def _ffmpeg_extract_segment(
+    src: Path, dst: Path, *, start_sec: float, duration_sec: float
+) -> None:
+    """Invoke ffmpeg to extract a segment from *src* → *dst*."""
+    cmd = [
+        "ffmpeg",
+        "-y", # Overwrite output without asking
+        "-i",
+        str(src),
+        "-ss", # Start time
+        str(start_sec),
+        "-t", # Duration
+        str(duration_sec),
+        "-c", # Codec - copy to avoid re-encoding if possible
+        "copy",
+        "-vn", # No video
+        str(dst),
+    ]
+    try:
+        _run(cmd)
+    except Exception as exc:  # noqa: BLE001
+        # If codec copy fails (e.g., format change), try re-encoding
+        logger.warning("ffmpeg segment extraction with 'copy' codec failed (%s), retrying with re-encoding...", exc)
+        # Use standard WAV codec (signed 16-bit PCM little-endian)
+        # Also specify channels/rate to match expected WAV format if re-encoding
+        cmd = [
+            "ffmpeg", "-y", "-i", str(src), "-ss", str(start_sec), "-t", str(duration_sec),
+            "-ac", "1", "-ar", "16000", "-vn", str(dst)
+        ]
+        try:
+            _run(cmd)
+        except Exception as exc_reencode:
+             raise ConverterError(f"ffmpeg segment extraction failed even with re-encoding: {exc_reencode}") from exc_reencode
 
 
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
-
 
 def convert_to_wav(
     src: Path,
@@ -108,5 +141,45 @@ def convert_to_wav(
     _ffmpeg_to_wav(src, dst, channels=channels, rate=rate)
     if not dst.exists():
         raise ConverterError(f"ffmpeg reported success but {dst} not found")
+
+    return dst
+
+
+def extract_audio_segment(
+    src: Path,
+    dst: Path,
+    *,
+    start_sec: float,
+    end_sec: float,
+) -> Path:
+    """Extracts an audio segment from *src* to *dst* between the given times.
+
+    Args:
+        src: Path to the source audio file.
+        dst: Path where the extracted segment will be saved.
+        start_sec: Start time of the segment in seconds.
+        end_sec: End time of the segment in seconds.
+
+    Returns:
+        The path to the created segment file (*dst*).
+
+    Raises:
+        ConverterError: If ffmpeg fails.
+        ValueError: If end_sec <= start_sec.
+    """
+    if end_sec <= start_sec:
+        raise ValueError(f"End time ({end_sec}) must be after start time ({start_sec})")
+
+    duration_sec = end_sec - start_sec
+    logger.info("Extracting audio segment from %s [%.3f - %.3f] (%.3fs) -> %s",
+                src.name, start_sec, end_sec, duration_sec, dst.name)
+
+    # Ensure destination directory exists
+    dst.parent.mkdir(parents=True, exist_ok=True)
+
+    _ffmpeg_extract_segment(src, dst, start_sec=start_sec, duration_sec=duration_sec)
+
+    if not dst.exists():
+        raise ConverterError(f"ffmpeg reported success but extracted segment {dst} not found")
 
     return dst
