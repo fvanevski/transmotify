@@ -1,4 +1,6 @@
- """speech_analysis.transcription.whisperx_wrapper
+# transcription/whisperx_wrapper.py
+
+"""transcription.whisperx_wrapper
 ------------------------------------------------
 Thin wrapper around the *whisperx* command‑line interface. Handles masking of
 HF tokens in logs, device selection, and automatic discovery of the primary
@@ -12,10 +14,10 @@ from pathlib import Path
 from typing import List, Optional, Final
 from uuid import uuid4
 
-from speech_analysis.core.logging import get_logger
-from speech_analysis.core.config import Config
-from speech_analysis.utils.subprocess import run as _run
-from speech_analysis.constants import (
+from core.logging import get_logger
+from core.config import Config
+from utils.subprocess import run as _run
+from constants import (
     INTERMEDIATE_STRUCTURED_TRANSCRIPT_NAME,
     FINAL_STRUCTURED_TRANSCRIPT_NAME,
     EMOTION_SUMMARY_JSON_NAME,
@@ -36,6 +38,7 @@ class WhisperXError(RuntimeError):
 # private helpers
 # ---------------------------------------------------------------------------
 
+
 def _mask_hf_token(cmd: List[str]) -> str:
     """Return a string version of *cmd* with the `--hf_token` value replaced."""
     masked: list[str] = []
@@ -55,6 +58,7 @@ def _mask_hf_token(cmd: List[str]) -> str:
 # ---------------------------------------------------------------------------
 # public API
 # ---------------------------------------------------------------------------
+
 
 def transcribe(audio: Path, cfg: Config, out_dir: Path) -> Path:
     """Run *whisperx* on *audio* and return the path to the primary JSON file."""
@@ -120,7 +124,9 @@ def transcribe(audio: Path, cfg: Config, out_dir: Path) -> Path:
         raise WhisperXError("could not locate whisperx JSON output")
 
     if len(candidates) > 1:
-        logger.warning("%s | multiple JSON outputs found; choosing %s", session, candidates[0].name)
+        logger.warning(
+            "%s | multiple JSON outputs found; choosing %s", session, candidates[0].name
+        )
     return candidates[0]
 
 

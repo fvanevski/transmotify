@@ -1,4 +1,6 @@
- """speech_analysis.io.converter
+# io/converter.py
+
+"""io.converter
 --------------------------------
 Audio conversion helpers built on ffmpeg/ffprobe.
 """
@@ -9,8 +11,8 @@ import subprocess
 from pathlib import Path
 from typing import Final, Optional
 
-from speech_analysis.core.logging import get_logger
-from speech_analysis.utils.subprocess import run as _run
+from core.logging import get_logger
+from utils.subprocess import run as _run
 
 logger = get_logger(__name__)
 
@@ -28,6 +30,7 @@ class ConverterError(RuntimeError):
 # ---------------------------------------------------------------------------
 # ffprobe duration check
 # ---------------------------------------------------------------------------
+
 
 def duration_ok(audio: Path, *, min_sec: float = 5.0) -> bool:
     """Return *True* if *audio* duration >= *min_sec* (or duration cannot be read).
@@ -65,6 +68,7 @@ def duration_ok(audio: Path, *, min_sec: float = 5.0) -> bool:
 # ffmpeg conversion
 # ---------------------------------------------------------------------------
 
+
 def _ffmpeg_to_wav(src: Path, dst: Path, *, channels: int, rate: int) -> None:
     """Invoke ffmpeg to convert *src* → *dst* WAV."""
     cmd = [
@@ -89,10 +93,11 @@ def _ffmpeg_to_wav(src: Path, dst: Path, *, channels: int, rate: int) -> None:
 # Public API
 # ---------------------------------------------------------------------------
 
+
 def convert_to_wav(
     src: Path,
     *,
-    cfg,  # speech_analysis.core.config.Config – imported via forward ref to avoid cycle
+    cfg,  # core.config.Config – imported via forward ref to avoid cycle
     tmp_dir: Optional[Path] = None,
 ) -> Path:
     """Convert *src* audio file to 16‑kHz mono WAV and return the new path.

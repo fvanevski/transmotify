@@ -1,4 +1,6 @@
- """speech_analysis.reporting.export
+# reporting/export.py
+
+"""reporting.export
 -----------------------------------
 Human‑readable transcript writer and final artifact bundler.
 """
@@ -11,13 +13,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Sequence
 
-from speech_analysis.constants import (
+from constants import (
     SCRIPT_TRANSCRIPT_NAME,
     FINAL_ZIP_SUFFIX,
 )
-from speech_analysis.core.logging import get_logger
-from speech_analysis.utils.paths import ensure_dir
-from speech_analysis.transcription.segments import (
+from core.logging import get_logger
+from utils.paths import ensure_dir
+from transcription.segments import (
     group_segments_by_speaker,
 )
 
@@ -31,6 +33,7 @@ __all__ = [
 # ---------------------------------------------------------------------------
 # Transcript helper
 # ---------------------------------------------------------------------------
+
 
 def _fmt_ts(sec: float | None) -> str:
     if sec is None:
@@ -73,6 +76,7 @@ def save_script_transcript(
 # ---------------------------------------------------------------------------
 # Bundler
 # ---------------------------------------------------------------------------
+
 
 def _collect_files(manifest: Dict[str, Path | Dict[str, Path]]) -> List[Path]:
     files: List[Path] = []

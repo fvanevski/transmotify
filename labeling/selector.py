@@ -1,4 +1,6 @@
- """speech_analysis.labeling.selector
+# labeling/selector.py
+
+"""labeling.selector
 ------------------------------------
 Utilities for *automatic* speaker selection and preview‑clip calculation that
 support the **interactive labeling** flow exposed in the Gradio UI.
@@ -25,9 +27,9 @@ from typing import List, Dict, Any, Tuple, Final
 
 from rapidfuzz import fuzz
 
-from speech_analysis.core.logging import get_logger
-from speech_analysis.constants import DEFAULT_SNIPPET_MATCH_THRESHOLD
-from speech_analysis.transcription.segments import (
+from core.logging import get_logger
+from constants import DEFAULT_SNIPPET_MATCH_THRESHOLD
+from transcription.segments import (
     Segment,
     SegmentsList,
     group_segments_by_speaker,
@@ -45,6 +47,7 @@ __all__: Final = [
 # ---------------------------------------------------------------------------
 # Speaker eligibility
 # ---------------------------------------------------------------------------
+
 
 def identify_eligible_speakers(
     segments: SegmentsList, *, min_total_time: float, min_block_time: float
@@ -97,6 +100,7 @@ def identify_eligible_speakers(
 # ---------------------------------------------------------------------------
 # Preview‑clip selection
 # ---------------------------------------------------------------------------
+
 
 def select_preview_time_segments(
     *,
@@ -153,6 +157,7 @@ def select_preview_time_segments(
 # Fuzzy snippet‑to‑speaker match
 # ---------------------------------------------------------------------------
 
+
 def match_snippets_to_speakers(
     *,
     segments: SegmentsList,
@@ -163,7 +168,11 @@ def match_snippets_to_speakers(
 
     Returns a mapping ``speaker_id -> user_name``.
     """
-    logger.info("Matching %d snippets against %d segments", len(speaker_snippet_map), len(segments))
+    logger.info(
+        "Matching %d snippets against %d segments",
+        len(speaker_snippet_map),
+        len(segments),
+    )
     if not speaker_snippet_map or not segments:
         return {}
 
@@ -191,8 +200,12 @@ def match_snippets_to_speakers(
             if best_score > speaker_best.get(best_id, -1.0):
                 mapping[str(best_id)] = user_name
                 speaker_best[str(best_id)] = best_score
-                logger.debug("Snippet '%s' matched to %s (%.1f)", user_name, best_id, best_score)
+                logger.debug(
+                    "Snippet '%s' matched to %s (%.1f)", user_name, best_id, best_score
+                )
         else:
-            logger.info("Snippet '%s' matched below threshold (%.1f)", user_name, best_score)
+            logger.info(
+                "Snippet '%s' matched below threshold (%.1f)", user_name, best_score
+            )
     logger.info("Final snippet mapping: %s", mapping)
     return mapping

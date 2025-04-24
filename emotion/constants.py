@@ -1,8 +1,9 @@
- """speech_analysis.emotion.constants
------------------------------------
+# emotion/constants.py
+
+"""
 Canonical mapping from emotion labels → scalar valence values.
-The map is imported by both :pymod:`speech_analysis.emotion.metrics` and
-:pymod:`speech_analysis.reporting.plotting` to keep sentiment math
+The map is imported by both :pymod:`emotion.metrics` and
+:pymod:`reporting.plotting` to keep sentiment math
 consistent across the codebase.
 """
 

@@ -1,8 +1,10 @@
-"""speech_analysis.labeling.session
+# labeling/session.py
+
+"""labeling.session
 -----------------------------------
 State holder for the **interactive speaker‑labeling** flow used by the Gradio
 UI.  It is intentionally lightweight: all heavy computation (preview‑time
-selection, snippet matching) lives in :pymod:`speech_analysis.labeling.selector`.
+selection, snippet matching) lives in :pymod:`labeling.selector`.
 """
 
 from __future__ import annotations
@@ -11,9 +13,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from speech_analysis.core.logging import get_logger
-from speech_analysis.labeling import selector
-from speech_analysis.transcription.segments import Segment  # typed‑alias
+from core.logging import get_logger
+from labeling import selector
+from transcription.segments import Segment  # typed‑alias
 
 logger = get_logger(__name__)
 
@@ -39,7 +41,7 @@ class LabelingSession:
 
     The session does **no** file‑system IO; it only keeps an in‑memory mapping
     of item‑IDs to speaker‑label progress and relies on
-    :pymod:`speech_analysis.labeling.selector` for all heavy math.
+    :pymod:`labeling.selector` for all heavy math.
     """
 
     def __init__(

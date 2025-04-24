@@ -1,4 +1,6 @@
- """speech_analysis.emotion.text_model
+# emotion/text_model.py
+
+"""emotion.text_model
 -------------------------------------
 Wrapper around a HuggingFace text‑classification pipeline that predicts
 **emotion probabilities** for a single utterance.
@@ -11,7 +13,7 @@ from typing import Dict, List, Final
 
 from transformers import pipeline as hf_pipeline
 
-from speech_analysis.core.logging import get_logger
+from core.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -25,7 +27,9 @@ _LABEL_FALLBACK = {"label": "no_text", "score": 1.0}
 class TextEmotionModel:
     """Lazy‑loads a HuggingFace emotion classifier and returns *probability dicts*."""
 
-    def __init__(self, model_name: str | None = None, *, device: str | int | None = None):
+    def __init__(
+        self, model_name: str | None = None, *, device: str | int | None = None
+    ):
         self.model_name = model_name or "j-hartmann/emotion-english-distilroberta-base"
         self.device = device  # -1 = CPU, 0+ = CUDA device id, None = auto
 
@@ -35,7 +39,9 @@ class TextEmotionModel:
 
     @cached_property
     def _pipe(self):
-        logger.info(f"Loading text emotion model '{self.model_name}' on device={self.device} …")
+        logger.info(
+            f"Loading text emotion model '{self.model_name}' on device={self.device} …"
+        )
         try:
             pipe = hf_pipeline(
                 "text-classification",

@@ -1,4 +1,6 @@
- """speech_analysis.utils.subprocess
+# utils/subprocess.py
+
+"""utils.subprocess
 -----------------------------------
 Safe wrapper around :pymod:`subprocess` that logs *every* stdout / stderr line,
 optionally streams it to a callback, and raises a dedicated exception on
@@ -8,7 +10,7 @@ Usage example
 -------------
 
 ```python
-from speech_analysis.utils.subprocess import run
+from utils.subprocess import run
 from pathlib import Path
 
 out = run(["ffmpeg", "-i", "in.mp4", "out.wav"], capture_output=True)
@@ -28,7 +30,7 @@ import traceback
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional
 
-from speech_analysis.core.logging import get_logger
+from core.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -121,7 +123,9 @@ def run(
                         stream_callback(line)
                     except Exception as cb_exc:  # pragma: no cover – user code
                         logger.warning(
-                            "stream_callback raised %s: %s", cb_exc.__class__.__name__, cb_exc
+                            "stream_callback raised %s: %s",
+                            cb_exc.__class__.__name__,
+                            cb_exc,
                         )
 
             return_code = proc.wait()

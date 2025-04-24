@@ -1,5 +1,7 @@
- """speech_analysis.config.schema
---------------------------------
+# config/schema.py
+
+"""config.schema
+-------------------------------
 Pydantic settings model that holds **all user‑tunable parameters** for the
 speech‑analysis pipeline.  Environment variables automatically override the
 defaults (thanks to BaseSettings).
@@ -15,7 +17,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal, Optional
 
-from pydantic import BaseSettings, Field, validator
+from pydantic import field_validator, Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 try:
     import torch
@@ -27,19 +30,27 @@ class Settings(BaseSettings):
     # ---------------------------------------------------------------------
     # Directories & logging
     # ---------------------------------------------------------------------
-    output_dir: Path = Field(Path("output"), description="Where all artifacts are written.")
-    temp_dir: Path = Field(Path("temp"), description="Scratch space for intermediate files.")
+    output_dir: Path = Field(
+        Path("output"), description="Where all artifacts are written."
+    )
+    temp_dir: Path = Field(
+        Path("temp"), description="Scratch space for intermediate files."
+    )
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
-    log_filename: str = Field("app.log", description="Name of the log file (inside output_dir)")
+    log_filename: str = Field(
+        "app.log", description="Name of the log file (inside output_dir)"
+    )
 
     # ------------------------------------------------------------------
     # Hardware / platform
     # ------------------------------------------------------------------
     device: Literal["auto", "cpu", "cuda"] = Field(
-        "auto", description="Execution device. 'auto' → choose cuda if available else cpu."
+        "auto",
+        description="Execution device. 'auto' → choose cuda if available else cpu.",
     )
     hf_token: Optional[str] = Field(
-        None, description="HuggingFace auth token (optional unless private models are used)."
+        None,
+        description="HuggingFace auth token (optional unless private models are used).",
     )
 
     # ------------------------------------------------------------------
@@ -57,9 +68,9 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------
     audio_emotion_model: str = "speechbrain/emotion-recognition-wav2vec2-IEMOCAP"
     pyannote_diarization_model: str = "pyannote/speaker-diarization-3.1"
-    deepface_detector_backend: Literal[
-        "opencv", "retinaface", "mediapipe", "ssd"
-    ] = "opencv"
+    deepface_detector_backend: Literal["opencv", "retinaface", "mediapipe", "ssd"] = (
+        "opencv"
+    )
 
     # ------------------------------------------------------------------
     # Processing parameters
@@ -91,14 +102,21 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------
     # Validators & derived defaults
     # ------------------------------------------------------------------
-    @validator("device", pre=True)  # runs before type validation so str accepted
+    @field_validator(
+        "device", mode="before"
+    )  # runs before type validation so str accepted
+    @classmethod
     def _auto_device(cls, v: str):  # noqa: N805
         if v == "auto":
-            cuda_ok = torch and getattr(torch, "cuda", None) and torch.cuda.is_available()
+            cuda_ok = (
+                torch and getattr(torch, "cuda", None) and torch.cuda.is_available()
+            )
             return "cuda" if cuda_ok else "cpu"
         return v
 
-    @validator("audio_fusion_weight")
+    # TODO[pydantic]: We couldn't refactor the `validator`, please replace it by `field_validator` manually.
+    # Check https://docs.pydantic.dev/dev-v2/migration/#changes-to-validators for more information.
+    @field_validator("audio_fusion_weight")
     def _fusion_sum_to_one(cls, v: float, values):  # noqa: N805
         text_w = values.get("text_fusion_weight", 0.0)
         if abs(text_w + v - 1.0) > 1e-3:
@@ -108,6 +126,4 @@ class Settings(BaseSettings):
             return v / total
         return v
 
-    class Config:
-        env_prefix = "SA_"  # All env vars start with SA_ (e.g. SA_OUTPUT_DIR)
-        env_file = ".env"  # Optional dotenv file
+    model_config = SettingsConfigDict(env_prefix="SA_", env_file=".env")

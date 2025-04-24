@@ -1,4 +1,6 @@
- """speech_analysis.transcription.segments
+# transcription/segments.py
+
+"""transcription.segments
 ---------------------------------------
 Utility functions that operate on the WhisperX JSON transcript structure.
 """
@@ -9,7 +11,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, TypedDict, Final
 
-from speech_analysis.core.logging import get_logger
+from core.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -55,7 +57,9 @@ def load_segments(json_path: Path) -> List[Segment]:
                 end=seg.get("end"),
                 text=(seg.get("text") or "").strip(),
                 speaker=str(seg.get("speaker", "unknown")),
-                words=seg.get("words", []) if isinstance(seg.get("words"), list) else [],
+                words=(
+                    seg.get("words", []) if isinstance(seg.get("words"), list) else []
+                ),
             )
         )
     logger.info("Loaded %d segments from %s", len(cleaned), json_path.name)

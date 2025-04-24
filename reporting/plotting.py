@@ -1,4 +1,6 @@
- """speech_analysis.reporting.plotting
+# reporting/plotting.py
+
+"""reporting.plotting
 -------------------------------------
 Matplotlib visualisations for the emotion analysis pipeline.  All functions
 create exactly *one* figure, save it to disk, and then close the figure to
@@ -14,8 +16,8 @@ from typing import List, Dict
 
 import matplotlib.pyplot as plt
 
-from speech_analysis.core.logging import get_logger
-from speech_analysis.emotion.constants import EMO_VAL
+from core.logging import get_logger
+from emotion.constants import EMO_VAL
 
 logger = get_logger(__name__)
 
@@ -29,6 +31,7 @@ __all__ = [
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _ensure_out_dir(out: Path) -> None:
     out.parent.mkdir(parents=True, exist_ok=True)

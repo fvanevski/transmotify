@@ -1,4 +1,6 @@
- """Tests for speech_analysis.labeling.session.LabelingSession."""
+# test/unit/test_labeling_session.py
+
+"""Tests for labeling.session.LabelingSession."""
 
 from __future__ import annotations
 
@@ -6,11 +8,12 @@ from typing import List, Dict
 
 import pytest
 
-from speech_analysis.labeling.session import LabelingSession, _ItemState
+from labeling.session import LabelingSession, _ItemState
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _mini_segments() -> List[Dict]:
     """Create a tiny synthetic transcript with two speakers."""
@@ -23,7 +26,7 @@ def _mini_segments() -> List[Dict]:
 # Monkey‑patch selector functions so tests are deterministic
 @pytest.fixture(autouse=True)
 def _patch_selector(monkeypatch):
-    from speech_analysis.labeling import selector as sel
+    from labeling import selector as sel
 
     monkeypatch.setattr(
         sel,
@@ -41,6 +44,7 @@ def _patch_selector(monkeypatch):
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
 
 def test_basic_flow():
     sess = LabelingSession(preview_duration=5.0, min_block_time=4.0)

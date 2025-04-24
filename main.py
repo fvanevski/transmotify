@@ -1,5 +1,5 @@
- """Package entry‑point.
-
+# main.py
+"""
 Initialises configuration, logging, and launches the Gradio UI defined in
 `ui.interface`.
 """
@@ -11,11 +11,10 @@ import traceback
 from pathlib import Path
 
 import torch
+from core.config import Config
+from core.logging import get_logger, init as setup_logging  # type: ignore
 
-from speech_analysis.core.config import Config
-from speech_analysis.core.logging import setup_logging, get_logger
-
-from ui.interface import build_ui  # NEW
+from ui.interface import WebApp as build_ui  # NEW
 
 
 def main() -> None:

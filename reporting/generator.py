@@ -1,4 +1,6 @@
-"""speech_analysis.reporting.generator
+# reporting/generator.py
+
+"""reporting.generator
 --------------------------------------
 Generate all reporting artifacts for a single analysis run.
 
@@ -14,16 +16,16 @@ import json
 from pathlib import Path
 from typing import Dict, List
 
-from speech_analysis.core.config import Config
-from speech_analysis.core.logging import get_logger
-from speech_analysis.constants import (
+from core.config import Config
+from core.logging import get_logger
+from constants import (
     EMOTION_SUMMARY_JSON_NAME,
     EMOTION_SUMMARY_CSV_NAME,
 )
 
-from speech_analysis.reporting import summaries as summ
-from speech_analysis.reporting import plotting as pltg
-from speech_analysis.reporting import export as exp
+from reporting import summaries as summ
+from reporting import plotting as pltg
+from reporting import export as exp
 
 logger = get_logger(__name__)
 

@@ -1,4 +1,6 @@
- """Unit tests for speech_analysis.core.logging"""
+# test/unit/test_logging.py
+
+"""Unit tests for core.logging"""
 
 from types import SimpleNamespace
 import tempfile
@@ -7,15 +9,13 @@ import importlib
 import logging
 import pytest
 
-import speech_analysis.core.logging as clog
+import core.logging as clog
 
 
 def _make_cfg(tmp_path):
     """Return a minimal config-like object expected by clog.init."""
     return SimpleNamespace(
-        log_dir=str(tmp_path),
-        log_filename="test.log",
-        log_level="INFO"
+        log_dir=str(tmp_path), log_filename="test.log", log_level="INFO"
     )
 
 
@@ -32,7 +32,7 @@ def test_init_creates_logfile(tmp_path):
     for h in logging.getLogger().handlers:
         if hasattr(h, "flush"):
             h.flush()
-    
+
     assert log_file.exists(), "Log file was not created"
     assert "hello world" in log_file.read_text(encoding="utf-8")
 
@@ -56,11 +56,7 @@ def test_invalid_dir_raises(tmp_path):
     bad_path = tmp_path / "occupied"
     bad_path.write_text("occupied")
 
-    cfg = SimpleNamespace(
-        log_dir=str(bad_path),
-        log_filename="x.log",
-        log_level="INFO"
-    )
+    cfg = SimpleNamespace(log_dir=str(bad_path), log_filename="x.log", log_level="INFO")
 
     with pytest.raises(clog.LoggingInitError):
         clog.init(cfg)

@@ -1,3 +1,5 @@
+# test/unit/test_reporting.py
+
 """Unit & integration tests for reporting layer (summaries + generator)."""
 
 from __future__ import annotations
@@ -24,9 +26,9 @@ sys.modules["matplotlib.pyplot"] = plt_stub
 # ---------------------------------------------------------------------------
 # Imports after stubbing matplotlib
 # ---------------------------------------------------------------------------
-from speech_analysis.core.config import Config
-from speech_analysis.reporting import summaries as summ
-from speech_analysis.reporting import generator as gen
+from core.config import Config
+from reporting import summaries as summ
+from reporting import generator as gen
 
 
 # ---------------------------------------------------------------------------

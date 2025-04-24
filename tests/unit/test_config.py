@@ -1,4 +1,6 @@
- """Unit tests for speech_analysis.core.config and config.schema"""
+# test/unit/test_config.py
+
+"""Unit tests for core.config and config.schema"""
 
 from __future__ import annotations
 
@@ -7,12 +9,13 @@ from pathlib import Path
 
 import pytest
 
-from speech_analysis.core.config import Config
+from core.config import Config
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _write_json(tmp_path: Path, data: dict) -> Path:
     p = tmp_path / "user_config.json"
@@ -23,6 +26,7 @@ def _write_json(tmp_path: Path, data: dict) -> Path:
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
 
 def test_defaults_load():
     cfg = Config()

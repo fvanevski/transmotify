@@ -1,6 +1,8 @@
- """speech_analysis.core.config
+# core/c
+
+"""core.config
 --------------------------------
-Runtime configuration facade that wraps :pymod:`speech_analysis.config.schema`
+Runtime configuration facade that wraps :pymod:`config.schema`
 so that callers can interact with *one* object regardless of whether settings
 originated from environment variables, a user‑supplied JSON file, or defaults.
 
@@ -22,14 +24,14 @@ from typing import Any, Iterator, MutableMapping
 
 import pydantic
 
-from speech_analysis.config.schema import Settings
-from speech_analysis.core.logging import get_logger
+from config.schema import Settings
+from core.logging import get_logger
 
 logger = get_logger(__name__)
 
 
 class Config(MutableMapping[str, Any]):
-    """A lightweight wrapper around :class:`~speech_analysis.config.schema.Settings`."""
+    """A lightweight wrapper around :class:`~config.schema.Settings`."""
 
     _settings: Settings
     _defaults: MappingProxyType
@@ -44,9 +46,13 @@ class Config(MutableMapping[str, Any]):
             if json_path.exists():
                 logger.info("Loading config overrides from %s", json_path)
                 overrides = Settings.parse_file(json_path)
-                settings = settings.model_copy(update=overrides.model_dump(exclude_unset=True))
+                settings = settings.model_copy(
+                    update=overrides.model_dump(exclude_unset=True)
+                )
             else:
-                logger.warning("Config JSON %s not found – using env/defaults", json_path)
+                logger.warning(
+                    "Config JSON %s not found – using env/defaults", json_path
+                )
 
         self._settings = settings
         self._defaults = MappingProxyType(Settings().model_dump())  # frozen baseline

@@ -1,4 +1,6 @@
- """speech_analysis.emotion.audio_model
+# emotion/audio_model.py
+
+"""emotion.audio_model
 --------------------------------------
 SpeechBrain‑based paralinguistic emotion classifier.
 
@@ -19,7 +21,7 @@ import torch
 
 from speechbrain.inference.interfaces import foreign_class
 
-from speech_analysis.core.logging import get_logger
+from core.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -48,7 +50,9 @@ class AudioEmotionModel:
 
     _DEFAULT_LABELS: Final[List[str]] = ["hap", "sad", "ang", "neu"]
 
-    def __init__(self, source: str, *, device: str = "auto", labels: List[str] | None = None):
+    def __init__(
+        self, source: str, *, device: str = "auto", labels: List[str] | None = None
+    ):
         self.source = source
         self.device = (
             "cuda" if device == "auto" and torch.cuda.is_available() else device
@@ -70,14 +74,18 @@ class AudioEmotionModel:
                 run_opts={"device": self.device},
             )
         except Exception as err:
-            logger.error("Failed to load SpeechBrain model from '%s': %s", self.source, err)
+            logger.error(
+                "Failed to load SpeechBrain model from '%s': %s", self.source, err
+            )
             return None  # type: ignore[return-value]
 
     # ------------------------------------------------------------------
     # Public prediction util
     # ------------------------------------------------------------------
 
-    def predict(self, waveform: torch.Tensor, sample_rate: int = 16_000) -> Dict[str, float]:
+    def predict(
+        self, waveform: torch.Tensor, sample_rate: int = 16_000
+    ) -> Dict[str, float]:
         """Return emotion probabilities for the given *mono* waveform.
 
         The waveform tensor is assumed to be on *CPU*; the method will move it
@@ -100,7 +108,11 @@ class AudioEmotionModel:
 
         # Typical SpeechBrain tuple: (probs, embeddings, lengths, predicted_labels)
         probs = None
-        if isinstance(out, (list, tuple)) and len(out) > 0 and isinstance(out[0], torch.Tensor):
+        if (
+            isinstance(out, (list, tuple))
+            and len(out) > 0
+            and isinstance(out[0], torch.Tensor)
+        ):
             probs = out[0].squeeze(0).detach().cpu().numpy()
             if probs.ndim != 1:
                 probs = probs.ravel()
@@ -109,7 +121,9 @@ class AudioEmotionModel:
             return {lbl: 0.25 for lbl in self._labels}
 
         # Ensure probabilities sum to 1
-        if not np.all((probs >= 0) & (probs <= 1)) or not np.isclose(probs.sum(), 1, atol=1e-3):
+        if not np.all((probs >= 0) & (probs <= 1)) or not np.isclose(
+            probs.sum(), 1, atol=1e-3
+        ):
             probs = torch.softmax(torch.as_tensor(probs), dim=-1).numpy()
 
         return {self._labels[i]: float(probs[i]) for i in range(len(self._labels))}

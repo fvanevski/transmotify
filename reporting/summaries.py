@@ -1,4 +1,6 @@
- """speech_analysis.reporting.summaries
+# reporting/summaries.py
+
+"""reporting.summaries
 --------------------------------------
 Compute per‑speaker and global emotion statistics from the structured segment
 list produced by the pipeline.
@@ -12,8 +14,8 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Dict, List, Sequence, Final
 
-from speech_analysis.core.logging import get_logger
-from speech_analysis.emotion.constants import EMO_VAL
+from core.logging import get_logger
+from emotion.constants import EMO_VAL
 
 logger = get_logger(__name__)
 
@@ -76,14 +78,24 @@ def build_summary(segments: List[Dict]) -> Dict[str, Dict]:
     # Post‑processing per speaker -------------------------------------------
     for stats in per_speaker.values():
         if stats.emotion_counts:
-            stats.dominant_emotion = max(stats.emotion_counts, key=stats.emotion_counts.get)
-        val_series = _valence_series(
-            [e for e, c in stats.emotion_counts.items() for _ in range(c)]
-        ) if stats.emotion_counts else []
+            stats.dominant_emotion = max(
+                stats.emotion_counts, key=stats.emotion_counts.get
+            )
+        val_series = (
+            _valence_series(
+                [e for e, c in stats.emotion_counts.items() for _ in range(c)]
+            )
+            if stats.emotion_counts
+            else []
+        )
         stats.volatility = statistics.pstdev(val_series) if len(val_series) > 1 else 0.0
 
     # Global stats -----------------------------------------------------------
-    global_dominant = max(global_emotion_counts, key=global_emotion_counts.get) if global_emotion_counts else None
+    global_dominant = (
+        max(global_emotion_counts, key=global_emotion_counts.get)
+        if global_emotion_counts
+        else None
+    )
     global_vol = statistics.pstdev(global_valence) if len(global_valence) > 1 else 0.0
 
     summary = {

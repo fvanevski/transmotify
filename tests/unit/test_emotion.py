@@ -1,4 +1,6 @@
-"""Unit tests for speech_analysis.emotion stack (fusion + analyzer)."""
+# test/unit/test_emotion.py
+
+"""Unit tests for emotion stack (fusion + analyzer)."""
 
 from __future__ import annotations
 
@@ -11,8 +13,8 @@ import pytest
 import torch
 import torchaudio
 
-from speech_analysis.emotion import fusion as fus
-from speech_analysis.emotion.analyzer import MultimodalAnalyzer
+from emotion import fusion as fus
+from emotion.analyzer import MultimodalAnalyzer
 
 
 # ---------------------------------------------------------------------------
@@ -51,8 +53,8 @@ def test_analyzer_integration(monkeypatch, tmp_path):
     # ------------------------------------------------------------------
     # Patch models before instantiating analyzer
     # ------------------------------------------------------------------
-    from speech_analysis.emotion import text_model as tmod
-    from speech_analysis.emotion import audio_model as amod
+    from emotion import text_model as tmod
+    from emotion import audio_model as amod
 
     monkeypatch.setattr(tmod, "TextEmotionModel", lambda *_a, **_k: _StubText())
     monkeypatch.setattr(amod, "AudioEmotionModel", lambda *_a, **_k: _StubAudio())

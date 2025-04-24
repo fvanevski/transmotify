@@ -1,4 +1,6 @@
- """speech_analysis.core.logging
+# core/logging.py
+
+"""core.logging
 --------------------------------
 Centralised, coloured, rotating logging for the whole package.
 Every executable entry‑point (CLI, Gradio UI, notebooks) **must** call
@@ -33,6 +35,7 @@ __all__ = [
 # Exceptions
 # ---------------------------------------------------------------------------
 
+
 class LoggingInitError(RuntimeError):
     """Raised when the logger cannot be initialised."""
 
@@ -41,12 +44,13 @@ class LoggingInitError(RuntimeError):
 # Public helpers
 # ---------------------------------------------------------------------------
 
+
 def get_logger(name: str | None = None) -> logging.Logger:  # noqa: D401
     """Return a ``logging.Logger`` (thin re‑export).
 
     Usage::
 
-        from speech_analysis.core.logging import get_logger
+        from core.logging import get_logger
         logger = get_logger(__name__)
     """
 
@@ -65,13 +69,14 @@ _DATE_FMT: Final[str] = "%Y-%m-%d %H:%M:%S"
 # Bootstrap API
 # ---------------------------------------------------------------------------
 
+
 def init(config: Any, *, console: bool = True) -> None:  # noqa: D401
     """Initialise the root logger.
 
     Parameters
     ----------
     config
-        A validated settings object (e.g., from ``speech_analysis.core.config``)
+        A validated settings object (e.g., from ``core.config``)
         exposing at minimum the following *attributes* (not dict keys)::
 
             log_level: str = "INFO"
@@ -96,7 +101,9 @@ def init(config: Any, *, console: bool = True) -> None:  # noqa: D401
         level_name: str = str(getattr(config, "log_level", "INFO"))
         level: int = getattr(logging, level_name.upper(), logging.INFO)
 
-        log_dir = Path(getattr(config, "log_dir", getattr(config, "output_dir", "output")))
+        log_dir = Path(
+            getattr(config, "log_dir", getattr(config, "output_dir", "output"))
+        )
         log_dir.mkdir(parents=True, exist_ok=True)
         log_path = log_dir / str(getattr(config, "log_filename", "app.log"))
 

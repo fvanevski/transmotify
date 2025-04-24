@@ -1,4 +1,6 @@
- """speech_analysis.utils.paths
+# utils/paths.py
+
+"""utils.paths
 --------------------------------
 Filesystem convenience helpers that are safe for concurrent use and free of
 pipeline‑specific logic.
@@ -10,7 +12,7 @@ import tempfile
 from pathlib import Path
 from typing import Final
 
-from speech_analysis.core.logging import get_logger
+from core.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -47,7 +49,6 @@ def ensure_dir(path: str | Path) -> Path:  # noqa: D401 – Imperative helper
         logger.exception("Unable to create directory: %s", p)
         raise
     return p
-
 
 
 def get_temp_file(suffix: str = "") -> Path:  # noqa: D401 – Imperative helper

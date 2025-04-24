@@ -1,4 +1,6 @@
- """speech_analysis.emotion.analyzer
+# emotion/analyzer.py
+
+"""emotion.analyzer
 ----------------------------------
 High‑level façade that orchestrates text, audio (SpeechBrain), and visual
 emotion models and writes fused labels back into transcript segments.
@@ -12,9 +14,9 @@ from typing import Any, Dict, List, Sequence
 import torch
 import torchaudio
 
-from speech_analysis.core.config import Config
-from speech_analysis.core.logging import get_logger
-from speech_analysis.transcription.segments import Segment
+from core.config import Config
+from core.logging import get_logger
+from transcription.segments import Segment
 
 from .text_model import TextEmotionModel
 from .audio_model import AudioEmotionModel
@@ -114,4 +116,6 @@ class MultimodalAnalyzer:
 
         logger.info("Multimodal analysis complete (%d segments).", len(segs))
         return segs
-# 
+
+
+#

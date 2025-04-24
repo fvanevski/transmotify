@@ -1,3 +1,5 @@
+# test/unit/test_utils.py
+
 """Unit tests for generic utilities (paths, subprocess, json)."""
 
 from __future__ import annotations
@@ -8,9 +10,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from speech_analysis.utils.paths import ensure_dir, get_temp_file
-from speech_analysis.utils.subprocess import run, SubprocessError
-from speech_analysis.utils.json import sanitize
+from utils.paths import ensure_dir, get_temp_file
+from utils.subprocess import run, SubprocessError
+from utils.json import sanitize
 
 
 # ---------------------------------------------------------------------------

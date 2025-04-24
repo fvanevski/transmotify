@@ -1,3 +1,5 @@
+# test/unit/test_transcription.py
+
 """Unit tests for transcription helpers (whisperx wrapper + segments).
 These tests mock out heavy dependencies so they run in <100 ms and require
 no external binaries.
@@ -13,11 +15,11 @@ from uuid import uuid4
 
 import pytest
 
-from speech_analysis.transcription.segments import (
+from transcription.segments import (
     load_segments,
     SegmentLoadError,
 )
-from speech_analysis.transcription.whisperx_wrapper import (
+from transcription.whisperx_wrapper import (
     transcribe,
     WhisperXError,
 )
@@ -89,9 +91,7 @@ def test_transcribe_fallback(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     # Patch utils.subprocess.run used inside whisperx_wrapper
     from speech_analysis import utils as _u  # dynamic import for patch path
 
-    monkeypatch.setattr(
-        "speech_analysis.transcription.whisperx_wrapper._run", _mock_run, raising=True
-    )
+    monkeypatch.setattr("transcription.whisperx_wrapper._run", _mock_run, raising=True)
 
     cfg = SimpleNamespace(
         whisper_model_size="tiny",
@@ -118,7 +118,7 @@ def test_transcribe_no_outputs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
         return None
 
     monkeypatch.setattr(
-        "speech_analysis.transcription.whisperx_wrapper._run",
+        "transcription.whisperx_wrapper._run",
         _run_no_files,
         raising=True,
     )

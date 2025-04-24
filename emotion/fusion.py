@@ -1,4 +1,6 @@
- """speech_analysis.emotion.fusion
+# emotion/fusion.py
+
+"""emotion.fusion
 --------------------------------
 Stateless helpers for fusing emotion probability dictionaries coming from
 text & audio classifiers.
@@ -8,7 +10,7 @@ from __future__ import annotations
 
 from typing import Dict, Tuple
 
-from speech_analysis.core.logging import get_logger
+from core.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -41,7 +43,9 @@ def fuse_weighted_average(
     labels = set(text_probs) | set(audio_probs)
     fused: Dict[str, float] = {}
     for lab in labels:
-        fused[lab] = text_w * text_probs.get(lab, 0.0) + audio_w * audio_probs.get(lab, 0.0)
+        fused[lab] = text_w * text_probs.get(lab, 0.0) + audio_w * audio_probs.get(
+            lab, 0.0
+        )
 
     if not fused or all(v == 0 for v in fused.values()):
         return "unknown", 0.0, fused

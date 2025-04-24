@@ -1,4 +1,6 @@
- """speech_analysis.utils.json
+# utils/json.py
+
+"""utils.json
 --------------------------------
 Helpers for making arbitrary Python data structures JSON‑serialisable.
 Currently focuses on numpy scalar promotion but is easily extensible.

@@ -1,4 +1,6 @@
- """speech_analysis.io.downloader
+# io/downloader.py
+
+"""io.downloader
 --------------------------------
 Utilities for acquiring audio assets from remote sources (currently YouTube)
 and converting them into pipeline‑ready WAV files.
@@ -7,10 +9,10 @@ The public entry point is :pyfunc:`download_youtube` which orchestrates:
 
 1. **yt‑dlp** download → WebM/Opus (or whatever bestaudio) into a temp dir.
 2. Metadata fetch via yt‑dlp JSON dump.
-3. Conversion to 16‑kHz mono WAV via :pymod:`speech_analysis.io.converter`.
+3. Conversion to 16‑kHz mono WAV via :pymod:`io.converter`.
 
 The actual subprocess execution is delegated to
-:pyfunc:`speech_analysis.utils.subprocess.run` so that we inherit logging and
+:pyfunc:`utils.subprocess.run` so that we inherit logging and
 error handling semantics.
 """
 
@@ -22,13 +24,13 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
-from speech_analysis.core.config import Config
-from speech_analysis.core.logging import get_logger
-from speech_analysis.utils.paths import ensure_dir
-from speech_analysis.utils.subprocess import run, SubprocessError
+from core.config import Config
+from core.logging import get_logger
+from utils.paths import ensure_dir
+from utils.subprocess import run, SubprocessError
 
 # This module depends on converter but converter does not depend on downloader
-from speech_analysis.io import converter as _converter  # type: ignore  # will be created in next step
+from io import converter as _converter  # type: ignore  # will be created in next step
 
 logger = get_logger(__name__)
 
@@ -44,11 +46,13 @@ _DEFAULT_YTDLP_FORMAT = "bestaudio/best"
 # helpers
 # ---------------------------------------------------------------------------
 
+
 def _progress_cb(session: str):
     """Return a callback that parses yt‑dlp download progress lines."""
 
     prog_rx = re.compile(
-        r"\[download\]\s+(?P<pct>[\d.]+%) of\s+~?(?P<size>[\d.]+\s*\w+)\s+at\s+(?P<speed>[\d.]+\s*\w+/s)\s+ETA\s+(?P<eta>[\d:]+)")
+        r"\[download\]\s+(?P<pct>[\d.]+%) of\s+~?(?P<size>[\d.]+\s*\w+)\s+at\s+(?P<speed>[\d.]+\s*\w+/s)\s+ETA\s+(?P<eta>[\d:]+)"
+    )
 
     def _cb(line: str) -> None:  # noqa: D401
         m = prog_rx.search(line)
@@ -70,6 +74,7 @@ def _progress_cb(session: str):
 # public API
 # ---------------------------------------------------------------------------
 
+
 def download_youtube(
     url: str,
     cfg: Config,
@@ -83,7 +88,7 @@ def download_youtube(
     url:
         The YouTube watch URL.
     cfg:
-        Validated :class:`speech_analysis.core.config.Config` object.
+        Validated :class:`core.config.Config` object.
     tmp:
         Optional directory for intermediate files; defaults to ``cfg.temp_dir``.
 

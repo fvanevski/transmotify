@@ -1,4 +1,6 @@
- """speech_analysis.pipeline.manager
+# pipeline/manager.py
+
+"""pipeline.manager
 ------------------------------------
 Stateless, linear orchestrator that wires together the core sub‑packages into
 a single *run_pipeline* function.  It deliberately avoids UI concerns, Excel
@@ -10,16 +12,16 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Iterable, List, Dict, Any
 
-from speech_analysis.core.config import Config
-from speech_analysis.core.logging import get_logger
+from core.config import Config
+from core.logging import get_logger
 
-from speech_analysis.io.downloader import download_youtube
-from speech_analysis.io.converter import convert_to_wav
-from speech_analysis.transcription.whisperx_wrapper import transcribe
-from speech_analysis.transcription.segments import load_segments
-from speech_analysis.emotion.analyzer import MultimodalAnalyzer
-from speech_analysis.reporting.generator import generate_all
-from speech_analysis.labeling import selector as labeling_selector
+from io.downloader import download_youtube
+from io.converter import convert_to_wav
+from transcription.whisperx_wrapper import transcribe
+from transcription.segments import load_segments
+from emotion.analyzer import MultimodalAnalyzer
+from reporting.generator import generate_all
+from labeling import selector as labeling_selector
 
 logger = get_logger(__name__)
 
@@ -29,6 +31,7 @@ __all__ = ["run_pipeline"]
 # ---------------------------------------------------------------------------
 # Public entry‑point
 # ---------------------------------------------------------------------------
+
 
 def run_pipeline(
     sources: Iterable[str],
@@ -46,7 +49,7 @@ def run_pipeline(
         Iterable of input locations.  YouTube URLs must start with http/https;
         Anything else is treated as a local audio/video file.
     cfg
-        A :class:`speech_analysis.core.config.Config` instance.
+        A :class:`core.config.Config` instance.
     out_root
         Folder in which per‑item sub‑directories will be created.  Defaults to
         ``cfg.output_dir``.
@@ -62,13 +65,15 @@ def run_pipeline(
         * ``source`` – the original input string
         * ``artifact_dir`` – the directory created for this item
         * ``report_manifest`` – return value of
-          :func:`speech_analysis.reporting.generator.generate_all`
+          :func:`reporting.generator.generate_all`
         * ``eligible_speakers`` – list of IDs (present only when *interactive*)
     """
     out_root = Path(out_root or cfg.output_dir).expanduser()
     out_root.mkdir(parents=True, exist_ok=True)
 
-    interactive = cfg.enable_interactive_labeling if interactive is None else interactive
+    interactive = (
+        cfg.enable_interactive_labeling if interactive is None else interactive
+    )
     analyzer = MultimodalAnalyzer(cfg)
 
     manifests: List[Dict[str, Any]] = []
