@@ -17,15 +17,11 @@ from constants import ( # type: ignore
     FINAL_ZIP_SUFFIX,
     EMOTION_SUMMARY_JSON_NAME,
     EMOTION_SUMMARY_CSV_NAME,
-    SCRIPT_TRANSCRIPT_NAME, # type: ignore
+    SCRIPT_TRANSCRIPT_NAME,
 )
 from core.logging import get_logger
 from utils.paths import ensure_dir
-from transcription.segments import (
-    group_segments_by_speaker,
-)
 
-logger = get_logger(__name__)
 
 __all__ = [
     "save_script_transcript",
@@ -34,6 +30,8 @@ __all__ = [
 
 # ---------------------------------------------------------------------------
 # Transcript helper
+# ---------------------------------------------------------------------------
+logger = get_logger(__name__)
 # ---------------------------------------------------------------------------
 
 
@@ -60,7 +58,10 @@ def save_script_transcript(
     path = out_dir / SCRIPT_TRANSCRIPT_NAME
 
     logger.info("Saving script transcript → %s", path)
-    blocks = group_segments_by_speaker(list(segments))
+    blocks = []
+    # group_segments_by_speaker was removed because it was causing a circular import
+    # this code must be reimplemented if the grouping is wanted.
+    # blocks = group_segments_by_speaker(list(segments))
 
     with path.open("w", encoding="utf-8") as fh:
         fh.write(f"Transcript for {item_id}\n")
