@@ -6,12 +6,9 @@
 
   # Use https://search.nixos.org/packages to find packages
   packages = [
-    # pkgs.go
-    # pkgs.python311
-    # pkgs.python311Packages.pip
-    # pkgs.nodejs_20
-    # pkgs.nodePackages.nodemon
-  ];
+    pkgs.python312
+    pkgs.python312Packages.pip
+    ];
 
   # Sets environment variables in the workspace
   env = {};
@@ -42,8 +39,11 @@
     workspace = {
       # Runs when a workspace is first created
       onCreate = {
-        # Example: install JS dependencies from NPM
-        # npm-install = "npm install";
+        create-venv = ''
+          python -m venv .venv
+          source .venv/bin/activate
+          pip install -r requirements.txt
+        '';
       };
       # Runs when the workspace is (re)started
       onStart = {
