@@ -1,15 +1,18 @@
 # reporting/generator.py
 
-"""reporting.generator
+\"\"\"reporting.generator
 --------------------------------------
 Generate all reporting artifacts for a single analysis run.
+
 The function `generate_all` is designed to be called by the pipeline manager
 once the segment list has been fully annotated (fused emotions, etc.). It
 creates the artifact directory if needed, delegates work to specialised
 modules, and returns a manifest mapping logical names to output paths, plus
 data required for interactive speaker labeling.
-"""
+\"\"\"
+
 from __future__ import annotations
+
 import json
 import subprocess
 import math
@@ -17,16 +20,24 @@ import shutil
 from pathlib import Path
 from typing import Dict, List, Tuple, Any
 from collections import defaultdict
+
 from core.config import Config
 from core.logging import get_logger
+from constants import (
+    EMOTION_SUMMARY_JSON_NAME, EMOTION_SUMMARY_CSV_NAME
+)
 from reporting import summaries as summ
 from reporting import plotting as pltg
 from reporting import export as exp
 # Need Segment type hint and grouping function
 from transcription.segments import Segment, SegmentsList, group_segments_by_speaker
 from utils.subprocess import run as run_subprocess, SubprocessError # Use the project's subprocess runner
+
 logger = get_logger(__name__)
+
 __all__ = ["generate_all"]
+
+
 # Helper function for audio snippet extraction
 def _extract_audio_snippet(
     input_wav: Path,
@@ -39,6 +50,7 @@ def _extract_audio_snippet(
     end_time = start_time + duration
     # Ensure output directory exists
     output_path.parent.mkdir(parents=True, exist_ok=True)
+
     # Use libmp3lame for MP3 encoding, reasonable quality preset
     cmd = [
         "ffmpeg",
@@ -70,9 +82,11 @@ def _extract_audio_snippet(
     except Exception as e:
         logger.error(f"Unexpected error extracting snippet {output_path.name}: {e}", exc_info=True)
         return None
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------\n# Public API\n# ---------------------------------------------------------------------------
+
+
 def generate_all(
     segments: SegmentsList,
     cfg: Config,
@@ -81,9 +95,13 @@ def generate_all(
     wav_path: Path | None = None, # Path to original WAV needed for snippets
     eligible_speakers: List[str] | None = None # List of speakers needing snippets/transcripts
 ) -> Tuple[Dict[str, Any], Dict[str, Dict[str, Any]]]: # Return (report_manifest, speaker_labeling_data)
-    """Create all reporting artifacts and data for labeling.
+    \"\"\"Create all reporting artifacts and data for labeling.
+
     Parameters
     ----------
+    segments
+        The list of segments with fused emotions already populated.
+    cfg
         Validated runtime configuration.
     artifact_root
         Directory where artifacts should be written.
@@ -91,17 +109,20 @@ def generate_all(
         Path to the full source WAV file for this item. Required if interactive labeling is enabled.
     eligible_speakers
         List of speaker IDs identified as eligible for labeling. Required if interactive labeling is enabled.
+
     Returns
-    -------
-    Tuple[Dict, Dict]
+    -------\n    Tuple[Dict, Dict]
         1. `report_manifest`: Mapping from logical artifact keys (``summary_json``, ``plots`` …)
            to their respective file paths.
         2. `speaker_labeling_data`: Mapping from eligible speaker IDs to dictionaries containing
            `audio_snippet_path` and `example_transcript`. Empty if labeling not enabled/possible.
-    """
+    \"\"\"
+
     artifact_root.mkdir(parents=True, exist_ok=True)
+
     report_manifest: Dict[str, Path | Dict[str, Path]] = {}
     speaker_labeling_data: Dict[str, Dict[str, Any]] = {}
+
     # --- Ensure inputs are valid for labeling snippet generation ---
     can_generate_snippets = (
          cfg.enable_interactive_labeling and
@@ -115,6 +136,7 @@ def generate_all(
          if not eligible_speakers: logger.warning("- No eligible speakers identified.")
          if not wav_path or not wav_path.exists(): logger.warning(f"- Source WAV path invalid or missing: {wav_path}")
          if not shutil.which("ffmpeg"): logger.warning("- ffmpeg command not found in PATH.")
+
     # ------------------------------------------------------------------
     # 0. Speaker Snippets & Transcripts (for Labeling)
     # ------------------------------------------------------------------
@@ -124,30 +146,37 @@ def generate_all(
         snippets_dir.mkdir(exist_ok=True)
         # Default duration unless overridden in config
         snippet_duration = getattr(cfg, 'speaker_labeling_snippet_duration', 5.0)
+
         # Group segments by speaker once for efficiency
         speaker_to_segments: Dict[str, List[Segment]] = defaultdict(list)
         for seg in segments:
             spk = seg.get("speaker")
             if spk:
                 speaker_to_segments[str(spk)].append(seg)
+
         for speaker_id in eligible_speakers:
             spk_segments = speaker_to_segments.get(speaker_id)
             if not spk_segments:
                 logger.warning(f"Speaker {speaker_id} is eligible but has no segments? Skipping snippet gen.")
                 continue
+
             # Find the longest continuous block for this speaker
             blocks = group_segments_by_speaker(spk_segments)
             if not blocks:
                 logger.warning(f"Could not group segments into blocks for speaker {speaker_id}. Skipping snippet gen.")
                 continue
+
             longest_block = max(blocks, key=lambda b: b.get("end", 0) - b.get("start", 0))
             start_time = longest_block.get("start")
             example_transcript = longest_block.get("text", "...")
+
             if start_time is None:
                  logger.warning(f"Longest block for speaker {speaker_id} has no start time. Skipping snippet gen.")
                  continue
+
              # Define output path for the snippet (use MP3 for web compatibility)
             snippet_path = snippets_dir / f"{speaker_id}_snippet.mp3"
+
             # Extract snippet using ffmpeg
             extracted_path = _extract_audio_snippet(
                 input_wav=wav_path,
@@ -156,6 +185,7 @@ def generate_all(
                 duration=snippet_duration,
                 cfg=cfg
             )
+
             if extracted_path:
                 speaker_labeling_data[speaker_id] = {
                     "audio_snippet_path": str(extracted_path), # Store as string for JSON etc.
@@ -165,11 +195,14 @@ def generate_all(
                  logger.warning(f"Failed to generate audio snippet for speaker {speaker_id}.")
                  # Store placeholder or skip? Skipping means this speaker won't appear in labeling UI.
                  # Let's skip for now, LabelingSession init should handle missing keys.
+
+
     # ------------------------------------------------------------------
     # 1. Summaries (JSON / CSV)
     # ------------------------------------------------------------------
     # (Keep existing summary logic)
     stats = summ.build_summary(segments)
+
     if cfg.include_json_summary:
         json_path = artifact_root / EMOTION_SUMMARY_JSON_NAME
         try:
@@ -179,6 +212,8 @@ def generate_all(
             report_manifest["summary_json"] = json_path
         except Exception as e:
             logger.error(f"Failed to save JSON summary: {e}", exc_info=True)
+
+
     if cfg.include_csv_summary:
         try:
             csv_path = artifact_root / EMOTION_SUMMARY_CSV_NAME
@@ -189,6 +224,8 @@ def generate_all(
             logger.warning("pandas not installed – skipping CSV summary export")
         except Exception as e:
             logger.error(f"Failed to save CSV summary: {e}", exc_info=True)
+
+
     # ------------------------------------------------------------------
     # 2. Plots
     # ------------------------------------------------------------------
@@ -198,6 +235,7 @@ def generate_all(
         plots_dir.mkdir(exist_ok=True)
         plots_manifest: Dict[str, Path] = {}
         plot_errors = False
+
         try:
             traj = pltg.plot_trajectory(segments, plots_dir / "trajectory.png")
             if traj: plots_manifest["trajectory"] = traj
@@ -222,11 +260,15 @@ def generate_all(
             if inten: plots_manifest["intensity"] = inten
             else: plot_errors=True
         except Exception as e: logger.error(f"Failed to generate intensity plot: {e}", exc_info=True); plot_errors=True
+
+
         if plots_manifest:
              report_manifest["plots"] = plots_manifest
              logger.info(f"Generated {len(plots_manifest)} plots in {plots_dir.name}/")
         if plot_errors:
              logger.warning("Some plots failed to generate (see errors above).")
+
+
     # ------------------------------------------------------------------
     # 3. Script‑like transcript
     # ------------------------------------------------------------------
@@ -241,6 +283,8 @@ def generate_all(
                  logger.info(f"Generated script transcript: {txt_path.name}")
         except Exception as e:
             logger.error(f"Failed to generate script transcript: {e}", exc_info=True)
+
+
     # ------------------------------------------------------------------
     # 4. Bundle ZIP (if any artifact warrants it) - Now consider snippets dir?
     # ------------------------------------------------------------------
@@ -255,5 +299,6 @@ def generate_all(
     #             logger.info(f"Created results bundle: {zip_path.name}")
     #     except Exception as e:
     #         logger.error(f"Failed to create results bundle: {e}", exc_info=True)
+
     # Return both the report manifest and the speaker labeling data
     return report_manifest, speaker_labeling_data
