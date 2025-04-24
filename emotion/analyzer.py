@@ -40,7 +40,9 @@ class MultimodalAnalyzer:
             # model_name=cfg.text_emotion_model, # Add if you put this in schema
             device=cfg.device
         )
-        self.audio_model = AudioEmotionModel(source=cfg.audio_emotion_model,device=cfg.device)
+        self.audio_model = AudioEmotionModel(
+            source=cfg.audio_emotion_model, device=cfg.device
+        )
 
         # visual is optional placeholder
         self.visual_model = VisualEmotionModel(cfg)
@@ -112,7 +114,7 @@ class MultimodalAnalyzer:
             text_only = {
                 lab: prob
                 for lab, prob in text_probs.items()
-                if lab not in self.audio_model.labels
+                if lab not in self.audio_model._labels
             }
             seg["significant_text_emotions"] = significant_text_only(
                 text_only,

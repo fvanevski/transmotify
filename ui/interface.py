@@ -1,10 +1,5 @@
 # ui/interface.py
-
-"""ui.interface
------------------------------------
-Main Gradio application entry point that defines the UI layout and orchestrates
-calls to the processing pipeline and labeling session manager.
-"""
+# (Keep imports and other parts of the file the same)
 
 from __future__ import annotations
 
@@ -13,6 +8,7 @@ import shutil
 import tempfile
 import time
 import traceback
+import zipfile  # <-- Import zipfile
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
@@ -219,6 +215,7 @@ class App:
                         return  # Stop processing on error
 
                     # Run the main pipeline
+                    run_cfg.log_level = "DEBUG"
                     self.batch_results = run_pipeline(sources=sources, cfg=run_cfg)
 
                     # If labeling enabled, prepare session
@@ -484,46 +481,102 @@ class App:
     def _package_results(
         self, results: List[Dict[str, Any]], cfg: Config
     ) -> Path | None:
-        """Create final ZIP archive from pipeline results."""
+        """Create final ZIP archive containing individual result zips for each item."""
         if not results:
             logger.warning("No results to package.")
             return None
 
-        # Determine base output dir from first result (assuming consistency)
-        first_output_dir = Path(results[0].get("output_directory", "."))
-        package_dir = first_output_dir.parent
-        zip_name_base = f"{package_dir.name}_outputs"
+        # Determine base output dir from config or a common parent directory
+        # Using cfg.output_dir seems more reliable than inferring from the first result
+        package_base_dir = Path(cfg.output_dir)
+        package_base_dir.mkdir(
+            parents=True, exist_ok=True
+        )  # Ensure base output dir exists
 
-        # Create ZIP file
-        zip_filename = find_unique_filename(package_dir, f"{zip_name_base}.zip")
-        zip_path = package_dir / zip_filename
+        # Define the final zip file name within the base output directory
+        zip_name_base = f"{package_base_dir.name}_outputs"
+        zip_filename = find_unique_filename(package_base_dir, f"{zip_name_base}.zip")
+        final_zip_path = package_base_dir / zip_filename
 
-        logger.info("Packaging results into %s", zip_path)
-
+        logger.info("Packaging results into %s", final_zip_path)
+        items_added_count = 0
         try:
-            shutil.make_archive(
-                base_name=str(
-                    zip_path.with_suffix("")
-                ),  # make_archive wants path without extension
-                format="zip",
-                root_dir=package_dir,
-                base_dir=first_output_dir.name,  # Zip only the specific output folder(s)
-                logger=logger,
-            )
+            with zipfile.ZipFile(final_zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                for item_result in results:
+                    item_output_dir_str = item_result.get("output_directory")
+                    item_name = item_result.get(
+                        "item_name", "unknown_item"
+                    )  # Get item name if available
 
-            # Optionally, clean up individual result folders after zipping?
-            # if cfg.cleanup_intermediate:
-            #     for item in results:
-            #         item_dir = Path(item.get("output_directory"))
-            #         if item_dir.exists() and item_dir.is_relative_to(package_dir):
-            #              logger.info("Cleaning up intermediate directory: %s", item_dir)
-            #              shutil.rmtree(item_dir)
+                    if not item_output_dir_str:
+                        logger.warning(
+                            "Skipping item %s: Missing 'output_directory' in results.",
+                            item_name,
+                        )
+                        continue
 
-            logger.info("Successfully created package: %s", zip_path)
-            return zip_path
+                    item_output_dir = Path(item_output_dir_str)
+                    if not item_output_dir.is_dir():
+                        logger.warning(
+                            "Skipping item %s: Output directory '%s' not found or not a directory.",
+                            item_name,
+                            item_output_dir,
+                        )
+                        continue
+
+                    # --- Find the individual results zip created by reporting.export ---
+                    # This assumes reporting.export creates a zip named like 'results_*.zip'
+                    # inside the item's output directory. Adjust glob pattern if needed.
+                    individual_result_zips = list(item_output_dir.glob("results_*.zip"))
+
+                    if not individual_result_zips:
+                        logger.warning(
+                            "Skipping item %s: No 'results_*.zip' file found in %s. "
+                            "Ensure reporting.export creates this file.",
+                            item_name,
+                            item_output_dir,
+                        )
+                        continue
+
+                    # Assuming only one results zip per item for simplicity
+                    result_zip_to_add = individual_result_zips[0]
+                    if len(individual_result_zips) > 1:
+                        logger.warning(
+                            "Item %s: Multiple 'results_*.zip' files found in %s, adding only %s",
+                            item_name,
+                            item_output_dir,
+                            result_zip_to_add.name,
+                        )
+
+                    # Define how the file should be named inside the final archive
+                    # e.g., "item_001/results_20250424T154732.zip"
+                    archive_name = Path(item_output_dir.name) / result_zip_to_add.name
+
+                    logger.info(f"Adding {result_zip_to_add} as {archive_name}")
+                    zf.write(result_zip_to_add, arcname=archive_name)
+                    items_added_count += 1
+
+            if items_added_count > 0:
+                logger.info(
+                    "Successfully created package: %s containing %d item(s)",
+                    final_zip_path,
+                    items_added_count,
+                )
+                return final_zip_path
+            else:
+                logger.error(
+                    "Failed to create results package: No valid result items found to add."
+                )
+                # Clean up empty zip file if created
+                if final_zip_path.exists():
+                    final_zip_path.unlink()
+                return None
 
         except Exception as zip_err:
             logger.error("Failed to create results package: %s", zip_err, exc_info=True)
+            # Clean up potentially corrupted zip file
+            if final_zip_path.exists():
+                final_zip_path.unlink(missing_ok=True)
             return None
 
 
