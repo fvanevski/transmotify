@@ -15,8 +15,8 @@ from typing import Iterable, List, Dict, Any
 from core.config import Config
 from core.logging import get_logger
 
-from io.downloader import download_youtube
-from io.converter import convert_to_wav
+from transmotify_io.downloader import download_youtube
+from transmotify_io.converter import convert_to_wav
 from transcription.whisperx_wrapper import transcribe
 from transcription.segments import load_segments
 from emotion.analyzer import MultimodalAnalyzer

@@ -29,8 +29,7 @@ from core.logging import get_logger
 from utils.paths import ensure_dir
 from utils.subprocess import run, SubprocessError
 
-# This module depends on converter but converter does not depend on downloader
-from io import converter as _converter  # type: ignore  # will be created in next step
+import transmotify_io.converter as _converter  # type: ignore
 
 logger = get_logger(__name__)
 

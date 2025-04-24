@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Final, Optional
 
 from core.logging import get_logger
+from transmotify_io.converter import ConverterError
 from utils.subprocess import run as _run
 
 logger = get_logger(__name__)
@@ -27,9 +28,6 @@ class ConverterError(RuntimeError):
     """Raised when ffmpeg/ffprobe operations fail."""
 
 
-# ---------------------------------------------------------------------------
-# ffprobe duration check
-# ---------------------------------------------------------------------------
 
 
 def duration_ok(audio: Path, *, min_sec: float = 5.0) -> bool:
