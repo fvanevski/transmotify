@@ -98,11 +98,12 @@ class MultimodalAnalyzer:
             text_probs: Dict[str, float] = seg.get("text_emotion", {})
             audio_probs: Dict[str, float] = seg.get("audio_emotion", {})
 
-            label, conf = fuse_weighted_average(
+            # Fixed the call: use keyword arguments and unpack 3 values
+            label, conf, _ = fuse_weighted_average(
                 text_probs,
                 audio_probs,
-                self.text_weight,
-                self.audio_weight,
+                text_weight=self.text_weight,
+                audio_weight=self.audio_weight,
             )
             seg["fused_emotion"] = label
             seg["fused_emotion_confidence"] = conf

@@ -19,7 +19,7 @@ error handling semantics.
 from __future__ import annotations
 
 import json
-import re
+# import re # No longer needed for progress parsing
 import uuid
 from pathlib import Path
 from typing import Any, Dict, Tuple
@@ -42,31 +42,30 @@ _DEFAULT_YTDLP_FORMAT = "bestaudio/best"
 
 
 # ---------------------------------------------------------------------------
-# helpers
+# helpers - Progress callback removed as yt-dlp will run quietly
 # ---------------------------------------------------------------------------
 
-
-def _progress_cb(session: str):
-    """Return a callback that parses yt‑dlp download progress lines."""
-
-    prog_rx = re.compile(
-        r"\[download\]\s+(?P<pct>[\d.]+%) of\s+~?(?P<size>[\d.]+\s*\w+)\s+at\s+(?P<speed>[\d.]+\s*\w+/s)\s+ETA\s+(?P<eta>[\d:]+)"
-    )
-
-    def _cb(line: str) -> None:  # noqa: D401
-        m = prog_rx.search(line)
-        if m:
-            logger.debug(
-                "%s yt-dlp %s %s ETA %s",
-                session,
-                m.group("pct"),
-                m.group("speed"),
-                m.group("eta"),
-            )
-        elif "[download] Destination:" in line:
-            logger.info("%s destination %s", session, line.split(":", 1)[1].strip())
-
-    return _cb
+# def _progress_cb(session: str):
+#     """Return a callback that parses yt‑dlp download progress lines."""
+#
+#     prog_rx = re.compile(
+#         r"\[download\]\s+(?P<pct>[\d.]+) of\s+~?(?P<size>[\d.]+\s*\w+)\s+at\s+(?P<speed>[\d.]+\s*\w+/s)\s+ETA\s+(?P<eta>[\d:]+)"
+#     )
+#
+#     def _cb(line: str) -> None:  # noqa: D401
+#         m = prog_rx.search(line)
+#         if m:
+#             logger.debug(
+#                 "%s yt-dlp %s %s ETA %s",
+#                 session,
+#                 m.group("pct"),
+#                 m.group("speed"),
+#                 m.group("eta"),
+#             )
+#         elif "[download] Destination:" in line:
+#             logger.info("%s destination %s", session, line.split(":", 1)[1].strip())
+#
+#     return _cb
 
 
 # ---------------------------------------------------------------------------
@@ -101,64 +100,103 @@ def download_youtube(
     session = uuid.uuid4().hex[:8]
     tmp_dir = ensure_dir(tmp or Path(cfg.temp_dir) / "youtube")
 
-    webm_path = tmp_dir / f"audio_{session}.webm"
+    # Use a generic extension first, yt-dlp might save as .m4a etc.
+    download_path_pattern = tmp_dir / f"audio_{session}.%(ext)s"
     wav_path = tmp_dir / f"audio_{session}.wav"
 
     yt_format = getattr(cfg, "youtube_dl_format", _DEFAULT_YTDLP_FORMAT)
 
     # ------------------------------------------------------------------
-    # 1. Download
+    # 1. Download (quietly)
     # ------------------------------------------------------------------
     cmd = [
         "yt-dlp",
+        "--quiet",  # Suppress non-error output
         "-f",
         yt_format,
         "-o",
-        str(webm_path),
+        str(download_path_pattern), # Use pattern to get actual extension
         "--",
         url,
     ]
 
-    logger.info("%s yt-dlp starting", session)
+    logger.info("%s yt-dlp starting download for %s", session, url)
+    downloaded_file_path = None
     try:
-        run(cmd, stream_callback=_progress_cb(session))
-    except SubprocessError as e:
-        raise RuntimeError(f"yt-dlp failed ({e})") from e
+        # Run without stream callback, capture output to find filename
+        output = run(cmd, capture_output=True)
+        # Find the actual downloaded file name (yt-dlp doesn't make this easy when quiet)
+        # We'll determine it after conversion, or rely on converter finding it.
 
-    if not webm_path.exists():
-        raise FileNotFoundError(f"yt-dlp claims success but {webm_path} is missing")
+        # Simple way: Find the first file matching the pattern
+        # This assumes only one file is downloaded per session, which should be true
+        potential_files = list(tmp_dir.glob(f"audio_{session}.*"))
+        # Exclude the target WAV file if it somehow exists already
+        potential_files = [f for f in potential_files if f.suffix != '.wav']
+        if not potential_files:
+             raise FileNotFoundError(f"Could not find downloaded audio file matching pattern audio_{session}.* in {tmp_dir}")
+        downloaded_file_path = potential_files[0]
+        logger.info("%s yt-dlp downloaded %s", session, downloaded_file_path.name)
+
+    except SubprocessError as e:
+        raise RuntimeError(f"yt-dlp download failed ({e})") from e
+    except FileNotFoundError as e:
+         raise e # Re-raise specific error
+    except Exception as e:
+        # Catch other potential errors during file finding
+        raise RuntimeError(f"Error finding downloaded file for {session}: {e}") from e
+
+
+    if not downloaded_file_path or not downloaded_file_path.exists():
+        raise FileNotFoundError(f"yt-dlp claims success but downloaded file {downloaded_file_path} is missing")
 
     # ------------------------------------------------------------------
     # 2. Convert → WAV (delegated)
     # ------------------------------------------------------------------
-    wav_path = _converter.convert_to_wav(webm_path, dst=wav_path, cfg=cfg)
+    # Pass the actual downloaded file path
+    wav_path = _converter.convert_to_wav(downloaded_file_path, dst=wav_path, cfg=cfg)
 
     if not wav_path.exists():
-        raise FileNotFoundError("ffmpeg conversion did not produce WAV file")
+        raise FileNotFoundError(f"ffmpeg conversion from {downloaded_file_path.name} did not produce WAV file {wav_path}")
 
     # ------------------------------------------------------------------
     # 3. Metadata fetch
     # ------------------------------------------------------------------
-    meta_cmd = ["yt-dlp", "-j", "--", url]
+    # Use --print-json for clean JSON output, --no-warnings to suppress other messages
+    meta_cmd = ["yt-dlp", "--print-json", "--no-warnings", "--", url]
     metadata: Dict[str, Any] = {"youtube_url": url}
+    logger.info("%s Fetching metadata for %s", session, url)
     try:
         out = run(meta_cmd, capture_output=True)
-        video_info = json.loads(out) if out else {}
-        metadata.update(
-            {
-                "video_title": video_info.get("fulltitle"),
-                "video_description": video_info.get("description"),
-                "video_uploader": video_info.get("uploader"),
-                "video_creators": video_info.get("creators"),
-                "upload_date": video_info.get("upload_date"),
-                "release_date": video_info.get("release_date"),
-            }
-        )
-    except (SubprocessError, json.JSONDecodeError):
-        logger.warning("%s metadata fetch failed", session)
+        if out:
+            video_info = json.loads(out)
+            metadata.update(
+                {
+                    "video_title": video_info.get("fulltitle"),
+                    "video_description": video_info.get("description"),
+                    "video_uploader": video_info.get("uploader"),
+                    "video_creators": video_info.get("creators"),
+                    "upload_date": video_info.get("upload_date"), # Format YYYYMMDD
+                    "release_date": video_info.get("release_date"), # Format YYYYMMDD
+                    "duration_string": video_info.get("duration_string"),
+                    "channel": video_info.get("channel"),
+                    "channel_url": video_info.get("channel_url"),
+                    "thumbnail": video_info.get("thumbnail"),
+                }
+            )
+            logger.info("%s Metadata fetch successful", session)
+        else:
+            logger.warning("%s metadata fetch returned empty output", session)
 
-    # Clean‑up intermediate file but ignore errors
-    webm_path.unlink(missing_ok=True)
+    except SubprocessError as e:
+        logger.warning("%s metadata fetch failed (yt-dlp error: %s)", session, e)
+    except json.JSONDecodeError as e:
+        logger.warning("%s metadata fetch failed (JSON decode error: %s)", session, e)
+        logger.debug("Faulty JSON string was: %s", out) # Log faulty output only on debug
 
-    logger.info("%s download complete → %s", session, wav_path.name)
+    # Clean‑up intermediate downloaded file but ignore errors
+    if downloaded_file_path and downloaded_file_path.exists():
+        downloaded_file_path.unlink(missing_ok=True)
+
+    logger.info("%s Processing complete for %s -> %s", session, url, wav_path.name)
     return wav_path, metadata

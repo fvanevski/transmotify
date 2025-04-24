@@ -1,76 +1,61 @@
 # ui/interface.py
 
-"""Gradio front‑end wiring for the speech‑analysis toolkit.
-
-This interface keeps the user‑journey identical to the legacy *main_gui.py*
-but is wired to the refactored back‑end stack:
-
-* `pipeline.manager.run_pipeline` for batch processing
-* `labeling.session.LabelingSession` for interactive speaker relabeling
-
-The module does **no** heavy computation – all `@gradio` callbacks yield UI
-updates or hand off work to the back‑end.
+"""ui.interface
+-----------------------------------
+Main Gradio application entry point that defines the UI layout and orchestrates
+calls to the processing pipeline and labeling session manager.
 """
 
 from __future__ import annotations
 
-import functools
-import math
-import re
+import json
+import shutil
+import tempfile
+import time
 import traceback
 from pathlib import Path
-from typing import Dict, List, Any, Optional, Generator
+from typing import Any, Dict, List, Tuple
 
 import gradio as gr
 from gradio import themes
-import pandas as pd
 
+from core.config import Config, load_config
 from core.logging import get_logger
-from core.config import Config
-from pipeline.manager import run_pipeline
 from labeling.session import LabelingSession
-from labeling import selector
+from pipeline.manager import run_pipeline
+from transmotify_io.converter import convert_audio_format
+from utils.json import read_json
+from utils.paths import ensure_dir, find_unique_filename
 
 logger = get_logger(__name__)
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+__all__ = ["App"]
 
 
-def _youtube_embed(url: str, start: int = 0) -> str:
-    """Return an HTML <iframe> for *url* at *start* seconds."""
-    if not url or not url.startswith("http"):
-        return "<p>Invalid YouTube URL</p>"
-    vid: Optional[str] = None
-    if "youtube.com/watch?v=" in url:
-        vid = url.split("v=")[1].split("&")[0]
-    elif "youtu.be/" in url:
-        vid = url.split("youtu.be/")[1].split("?")[0]
-    if not vid:
-        return f"<p>Could not extract Video ID from URL: {url}</p>"
-    start = max(0, int(math.floor(start)))
-    return (
-        f'<iframe width="560" height="315" '
-        f'src="https://www.youtube.com/embed/{vid}?start={start}&controls=1" '
-        f'title="YouTube video player" frameborder="0" '
-        f'allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" '
-        f"allowfullscreen></iframe>"
-    )
+# --------------------------------------------------------------------------
+# Constants
+# --------------------------------------------------------------------------
+
+POLL_INTERVAL_S = 1
 
 
-# ---------------------------------------------------------------------------
-# UI class
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------
+# Gradio app class
+# --------------------------------------------------------------------------
 
 
-class WebApp:
-    """Instantiate Gradio Blocks bound to the back‑end pipeline."""
+class App:
+    """Encapsulates Gradio UI state and interactions."""
 
     def __init__(self, cfg: Config):
-        self.cfg = cfg
-        self.session: Optional[LabelingSession] = None
+        """Initialise UI state."""
+        self.cfg: Config = cfg
         self.batch_results: List[Dict[str, Any]] = []
+        self.labeling_session: LabelingSession | None = None
+        self.temp_dir: Path = ensure_dir(Path(tempfile.gettempdir()) / "transmotify-ui")
+        self.blocks: gr.Blocks | None = None
+
+        # Build interface definition
         self._build_interface()
 
     # ------------------------------------------------------------------
@@ -95,14 +80,34 @@ class WebApp:
                     gr.Markdown("## Upload batch Excel (.xlsx)")
                     file_input = gr.File(file_types=[".xlsx"], type="filepath")
 
-                    with gr.Row():
-                        include_plots = gr.Checkbox(
-                            "Plots", value=self.cfg.include_plots
+                    with gr.Group(): # Group output options
+                        gr.Markdown("### Output Options")
+                        include_source_audio_checkbox = gr.Checkbox(
+                            label="Include Source Audio",
+                            value=getattr(self.cfg, 'include_source_audio', True) # Use getattr for safety
                         )
-                        label_mode = gr.Checkbox(
-                            "Interactive speaker labeling",
-                            value=self.cfg.enable_interactive_labeling,
+                        include_json_summary_checkbox = gr.Checkbox(
+                            label="Include Granular Emotion Summary JSON",
+                            value=getattr(self.cfg, 'include_json_summary', True)
                         )
+                        include_csv_summary_checkbox = gr.Checkbox(
+                            label="Include Overall Emotion Summary CSV",
+                            value=getattr(self.cfg, 'include_csv_summary', False)
+                        )
+                        include_script_transcript_checkbox = gr.Checkbox(
+                            label="Include Simple Script",
+                            value=getattr(self.cfg, 'include_script_transcript', False)
+                        )
+                        include_plots_checkbox = gr.Checkbox( # Renamed from include_plots
+                            label="Include Plots",
+                            value=getattr(self.cfg, 'include_plots', False)
+                        )
+
+                    # Interactive labeling toggle (kept separate)
+                    label_mode = gr.Checkbox(
+                        label="Interactive speaker labeling",
+                        value=self.cfg.enable_interactive_labeling,
+                    )
                     run_btn = gr.Button("Run analysis ▶", variant="primary")
 
                 # ------------------------- status column --------------
@@ -125,126 +130,353 @@ class WebApp:
 
             def _ui_mode(new: str):
                 """Return Gradio `update` dict showing/hiding blocks."""
+                is_labeling = new == "labeling"
                 return {
-                    label_column: gr.update(visible=(new == "labeling")),
-                    run_btn: gr.update(
-                        interactive=(new in {"idle", "finished", "error"})
+                    mode: new,
+                    label_column: gr.update(visible=is_labeling),
+                    run_btn: gr.update(visible=not is_labeling),
+                    file_input: gr.update(visible=not is_labeling),
+                }
+
+            def _status(text: str):
+                """Update status box."""
+                return {status_box: gr.update(value=text)}
+
+            def _download_link(path: Path | None):
+                """Update download box with link if available."""
+                if path and path.exists():
+                    # Copy to temp dir to ensure Gradio can serve it
+                    serve_path = self.temp_dir / path.name
+                    shutil.copy(path, serve_path)
+                    logger.info("Copied final output to %s for serving", serve_path)
+                    return {
+                        download_box: gr.update(
+                            value=f"[{path.name}](/file={serve_path})", visible=True
+                        )
+                    }
+                return {download_box: gr.update(value="", visible=False)}
+
+            # ------------------------- main pipeline runner ----------
+
+            def do_run(
+                file_obj: tempfile.TemporaryFile,
+                labeling_enabled: bool,
+                # Pass checkbox values
+                incl_source_audio: bool,
+                incl_json_summary: bool,
+                incl_csv_summary: bool,
+                incl_script: bool,
+                incl_plots: bool,
+                progress=gr.Progress(track_tqdm=True),
+            ):
+                """Entry point triggered by 'Run analysis' button."""
+                if not file_obj:
+                    return {**_ui_mode("idle"), **_status("Error: No file uploaded.")}
+
+                yield {
+                    **_ui_mode("processing"),
+                    **_status("Starting batch processing..."),
+                    **_download_link(None), # Clear download link
+                }
+
+                xlsx_path = Path(file_obj.name)
+                try:
+                    # Override config values based on checkboxes
+                    # We modify a *copy* so the original cfg isn't changed
+                    run_cfg = self.cfg.model_copy(update={
+                        "enable_interactive_labeling": labeling_enabled,
+                        "include_source_audio": incl_source_audio,
+                        "include_json_summary": incl_json_summary,
+                        "include_csv_summary": incl_csv_summary,
+                        "include_script_transcript": incl_script,
+                        "include_plots": incl_plots,
+                    })
+
+                    logger.info("Run config overrides: %s", run_cfg.model_dump(exclude={'hf_token', 'openai_api_key'}))
+
+                    # Run the main pipeline
+                    self.batch_results = run_pipeline(
+                        input_excel=xlsx_path, cfg=run_cfg
+                    )
+
+                    # If labeling enabled, prepare session
+                    if labeling_enabled:
+                        self.labeling_session = LabelingSession(
+                            self.batch_results, cfg=run_cfg
+                        )
+                        self.labeling_session.start()
+                        yield _ui_mode("labeling")
+                        yield from do_labeling_update(0, 0)  # Show first speaker
+                    else:
+                        # Package non-labeling results
+                        final_zip = self._package_results(self.batch_results, run_cfg)
+                        yield {
+                            **_ui_mode("finished"),
+                            **_status(f"Analysis complete. Results packaged."),
+                            **_download_link(final_zip),
+                        }
+
+                except Exception as e:
+                    logger.error("Pipeline failure", exc_info=True)
+                    yield {
+                        **_ui_mode("error"),
+                        **_status(f"Error: {e}
+{traceback.format_exc()}"),
+                        **_download_link(None),
+                    }
+
+            # ------------------------- labeling interactions ---------
+
+            def do_labeling_update(
+                current_item_idx: int, current_speaker_idx: int
+            ) -> Dict[str, Any]:
+                """Update labeling UI elements for the current speaker."""
+                if not self.labeling_session:
+                    return _status("Error: Labeling session not initialised.")
+
+                item_info, speaker_info, progress = self.labeling_session.get_state(
+                    current_item_idx, current_speaker_idx
+                )
+
+                progress_str = (
+                    f"Item {progress['item_num']}/{progress['total_items']} "
+                    f"(Speaker {progress['speaker_num']}/{progress['total_speakers']})"
+                )
+
+                # Prepare audio player HTML
+                audio_path_str = str(speaker_info["audio_snippet_path"])
+                # Convert to MP3 for browser compatibility if needed
+                mp3_path = self.temp_dir / f"{Path(audio_path_str).stem}.mp3"
+
+                try:
+                    # Only convert if MP3 doesn't exist or source is newer
+                    if not mp3_path.exists() or Path(audio_path_str).stat().st_mtime > mp3_path.stat().st_mtime:
+                         # Ensure converter uses a config where output_dir is temp_dir
+                        conv_cfg = self.cfg.model_copy(update={"output_dir": self.temp_dir})
+                        converted = convert_audio_format(Path(audio_path_str), dst_format="mp3", cfg=conv_cfg, output_dir=self.temp_dir)
+                        # Note: convert_audio_format might place it directly in temp_dir or a sub-folder
+                        # Assuming it returns the correct path or places it predictably
+                        if converted and converted.exists():
+                             mp3_path = converted # Use the path returned by converter
+                        elif (self.temp_dir / f"{Path(audio_path_str).stem}.mp3").exists():
+                             mp3_path = self.temp_dir / f"{Path(audio_path_str).stem}.mp3"
+                        else:
+                             logger.warning("MP3 conversion failed or file not found for %s", audio_path_str)
+                             # Fallback? Serve original? For now, log warning.
+
+                except Exception as conv_err:
+                    logger.error("Error converting snippet %s to MP3: %s", audio_path_str, conv_err)
+                    # Fallback or indicate error in UI?
+
+                # Use file= for Gradio server; depends on where conversion saves it
+                audio_url = f"/file={mp3_path}" if mp3_path.exists() else ""
+
+                html_content = f"""
+                <h4>{item_info['name']} - Speaker {speaker_info['id']}</h4>
+                <p>Saying: <i>"{speaker_info['example_transcript']}"</i></p>
+                """
+                if audio_url:
+                     html_content += f"""
+                     <audio controls preload="auto">
+                         <source src="{audio_url}" type="audio/mpeg">
+                         Your browser does not support the audio element.
+                     </audio>
+                     """
+                else:
+                     html_content += "<p><i>Audio preview unavailable.</i></p>"
+
+
+                return {
+                    item_idx: current_item_idx,
+                    speaker_idx: current_speaker_idx,
+                    progress_md: gr.update(value=progress_str),
+                    video_html: gr.update(value=html_content),
+                    label_input: gr.update(value=speaker_info.get("label", "")),
+                    nav_prev: gr.update(
+                        interactive=progress["item_num"] > 1
+                        or progress["speaker_num"] > 1
+                    ),
+                    nav_next: gr.update(
+                        interactive=progress["item_num"] < progress["total_items"]
+                        or progress["speaker_num"] < progress["total_speakers"]
                     ),
                 }
 
-            # ------------------------- pipeline run ------------------
-
-            def do_run(xlsx_path: str, want_plots: bool, want_labeling: bool):
-                if not xlsx_path:
-                    yield {
-                        status_box: "❗ Upload an .xlsx file first",
-                        **_ui_mode("error"),
-                    }
-                    return
-
-                yield {status_box: "Running batch …", **_ui_mode("processing")}
-
-                # Read urls from excel (still here because easy)
-                try:
-                    df = pd.read_excel(xlsx_path)
-                except Exception as exc:  # pragma: no cover
-                    yield {
-                        status_box: f"❗ Failed to read Excel: {exc}",
-                        **_ui_mode("error"),
-                    }
-                    return
-                url_col = self.cfg.get("batch_url_column", "YouTube URL")
-                if url_col not in df.columns:
-                    yield {
-                        status_box: f"❗ Column '{url_col}' missing",
-                        **_ui_mode("error"),
-                    }
-                    return
-                sources = df[url_col].dropna().tolist()
-
-                # run backend (streaming not needed – batch is usually quick)
-                try:
-                    self.batch_results = run_pipeline(
-                        sources, self.cfg, interactive=want_labeling
-                    )
-                except Exception as exc:  # pragma: no cover
-                    logger.exception("Pipeline failure")
-                    yield {
-                        status_box: f"❗ Pipeline crashed: {exc}",
-                        **_ui_mode("error"),
-                    }
-                    return
-
-                yield {
-                    status_box: "Batch completed",
-                    result_manifest: self.batch_results,
-                }
-
-                if not want_labeling:
-                    # all done – provide zip links (they’re inside manifest)
-                    zips = [
-                        d["report_manifest"].get("bundle_zip")
-                        for d in self.batch_results
-                        if d
-                    ]
-                    dl_text = "\n".join(map(str, filter(None, zips))) or "<no zip>"
-                    yield {download_box: dl_text, **_ui_mode("finished")}
-                    return
-
-                # init session for labeling
-                self.session = LabelingSession(
-                    preview_duration=self.cfg.speaker_labeling_preview_duration,
-                    min_block_time=self.cfg.speaker_labeling_min_block_time,
-                    min_total_time=self.cfg.speaker_labeling_min_total_time,
+            def do_labeling_nav(
+                current_item_idx: int, current_speaker_idx: int, direction: str
+            ) -> Dict[str, Any]:
+                """Handle Prev/Next button clicks."""
+                if not self.labeling_session:
+                    return {}
+                new_item_idx, new_speaker_idx = self.labeling_session.navigate(
+                    current_item_idx, current_speaker_idx, direction
                 )
-                items_added = 0
-                for item_data in self.batch_results:
-                    if item_data and item_data.get("processed_segments") and item_data.get("eligible_speakers"):
-                        self.session.add_item(
-                            item_id=item_data["artifact_dir"].name,
-                            segments=item_data["processed_segments"],
-                            youtube_url=item_data["metadata"].get("youtube_url", item_data.get("source")),
-                        )
-                        items_added += 1
-                    else:
-                        logger.warning(f"Skipping item due to missing data for labeling: {item_data.get('source')}")
-
-                if not items_added or not self.session.pending_items():
-                    yield {status_box: "Batch completed, but no items eligible for labeling.", **_ui_mode("finished")}
-                    return
-
-                # Start labeling with the first pending item
-                first_pending_id = self.session.pending_items()[0]
-                first_labeling_data = self.session.start(first_pending_id)
-                if first_labeling_data:
-                  spk_id, yt, starts = first_labeling_data  # type: ignore
-                
-                video = _youtube_embed(yt, starts[0] if starts else 0)
-                yield {
-                    progress_md: f"Item 1 / Speaker 1 **{spk_id}**",
-                    video_html: video,
-                    **_ui_mode("labeling"),
-                }
+                # Use yield to update state *before* yielding UI updates
+                yield {item_idx: new_item_idx, speaker_idx: new_speaker_idx}
+                yield from do_labeling_update(new_item_idx, new_speaker_idx)
 
 
+            def do_labeling_submit(
+                current_item_idx: int, current_speaker_idx: int, label_text: str
+            ) -> Dict[str, Any]:
+                """Handle 'Store label' button click."""
+                if not self.labeling_session:
+                    return _status("Error: Labeling session not active.")
+                self.labeling_session.store_label(
+                    current_item_idx, current_speaker_idx, label_text
+                )
 
+                # Check if finished
+                if self.labeling_session.is_complete():
+                    final_zip = self._package_results(
+                        self.labeling_session.get_labeled_results(), self.cfg
+                    )
+                    # Yield intermediate status before final UI mode change
+                    yield _status("Labeling complete. Packaging results...")
+                    yield {
+                         **_ui_mode("finished"),
+                         **_status("Labeling complete. Results packaged."),
+                         **_download_link(final_zip)
+                     }
+                else:
+                    # Auto-advance to next speaker
+                    yield from do_labeling_nav(
+                        current_item_idx, current_speaker_idx, "next"
+                    )
+
+
+            # ------------------------- wiring ------------------------
             run_btn.click(
-                do_run,
-                inputs=[file_input, include_plots, label_mode],
+                fn=do_run,
+                inputs=[
+                    file_input,
+                    label_mode,
+                    include_source_audio_checkbox,
+                    include_json_summary_checkbox,
+                    include_csv_summary_checkbox,
+                    include_script_transcript_checkbox,
+                    include_plots_checkbox,
+                ],
                 outputs=[
+                    mode,
                     status_box,
+                    label_column,
+                    run_btn,
+                    file_input,
                     download_box,
-                    result_manifest,
-                    *_ui_mode("idle").keys(),
+                    # Labeling UI outputs (for initial population if labeling starts)
+                    item_idx,
+                    speaker_idx,
+                    progress_md,
+                    video_html,
+                    label_input,
+                    nav_prev,
+                    nav_next,
                 ],
             )
 
-        # end Blocks
+            nav_prev.click(
+                 fn=lambda iidx, sidx: do_labeling_nav(iidx, sidx, "prev"),
+                 inputs=[item_idx, speaker_idx],
+                 outputs=[item_idx, speaker_idx, progress_md, video_html, label_input, nav_prev, nav_next],
+                 # queuing=False # Faster updates for navigation?
+            )
+            nav_next.click(
+                 fn=lambda iidx, sidx: do_labeling_nav(iidx, sidx, "next"),
+                 inputs=[item_idx, speaker_idx],
+                 outputs=[item_idx, speaker_idx, progress_md, video_html, label_input, nav_prev, nav_next],
+                 # queuing=False
+            )
+            submit_btn.click(
+                 fn=do_labeling_submit,
+                 inputs=[item_idx, speaker_idx, label_input],
+                 outputs=[
+                     mode,
+                     status_box,
+                     label_column,
+                     run_btn,
+                     file_input,
+                     download_box,
+                     # Labeling UI outputs (for next speaker or finished state)
+                     item_idx,
+                     speaker_idx,
+                     progress_md,
+                     video_html,
+                     label_input,
+                     nav_prev,
+                     nav_next,
+                 ],
+            )
+
         self.blocks = demo
 
-    # ------------------------------------------------------------------
-    # public
-    # ------------------------------------------------------------------
 
-    def launch(self, **kwargs):
-        self.blocks.launch(**kwargs)
+    def launch(self, *args, **kwargs):
+        """Launch the Gradio interface."""
+        if not self.blocks:
+            self._build_interface()
+
+        if self.blocks:
+            self.blocks.queue() # Enable queuing for handling multiple requests
+            self.blocks.launch(*args, **kwargs)
+        else:
+            logger.error("Failed to build Gradio interface.")
+
+
+    # --------------------------------------------------------------------
+    # Internal helpers
+    # --------------------------------------------------------------------
+
+    def _package_results(
+        self, results: List[Dict[str, Any]], cfg: Config
+    ) -> Path | None:
+        """Create final ZIP archive from pipeline results."""
+        if not results:
+            logger.warning("No results to package.")
+            return None
+
+        # Determine base output dir from first result (assuming consistency)
+        first_output_dir = Path(results[0].get("output_directory", "."))
+        package_dir = first_output_dir.parent
+        zip_name_base = f"{package_dir.name}_outputs"
+
+        # Create ZIP file
+        zip_filename = find_unique_filename(package_dir, f"{zip_name_base}.zip")
+        zip_path = package_dir / zip_filename
+
+        logger.info("Packaging results into %s", zip_path)
+
+        try:
+             shutil.make_archive(
+                 base_name=str(zip_path.with_suffix('')), # make_archive wants path without extension
+                 format='zip',
+                 root_dir=package_dir,
+                 base_dir=first_output_dir.name, # Zip only the specific output folder(s)
+                 logger=logger
+             )
+
+             # Optionally, clean up individual result folders after zipping?
+             # if cfg.cleanup_intermediate:
+             #     for item in results:
+             #         item_dir = Path(item.get("output_directory"))
+             #         if item_dir.exists() and item_dir.is_relative_to(package_dir):
+             #              logger.info("Cleaning up intermediate directory: %s", item_dir)
+             #              shutil.rmtree(item_dir)
+
+             logger.info("Successfully created package: %s", zip_path)
+             return zip_path
+
+        except Exception as zip_err:
+            logger.error("Failed to create results package: %s", zip_err, exc_info=True)
+            return None
+
+
+# --------------------------------------------------------------------------
+# Entry point
+# --------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    config = load_config()  # Load config from default path
+    app = App(cfg=config)
+    logger.info("Launching Gradio UI …")
+    app.launch(server_name="0.0.0.0", share=False) # Run on local network
