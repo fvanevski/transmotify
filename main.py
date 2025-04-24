@@ -33,6 +33,7 @@ def main() -> None:
     # Config + logging
     # ---------------------------------------------------------
     cfg = Config()
+    print(f"DEBUG: Config log_filename is: {cfg.log_filename}")
     setup_logging(cfg)
     logger = get_logger(__name__)
 
