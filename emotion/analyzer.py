@@ -34,8 +34,14 @@ class MultimodalAnalyzer:
 
     def __init__(self, cfg: Config):
         self.cfg = cfg
-        self.text_model = TextEmotionModel(cfg)
-        self.audio_model = AudioEmotionModel(cfg)
+        # Pass specific config values, not the whole cfg object
+        self.text_model = TextEmotionModel(
+            # Assuming text model name isn't in schema, let it use its default
+            # model_name=cfg.text_emotion_model, # Add if you put this in schema
+            device=cfg.device
+        )
+        self.audio_model = AudioEmotionModel(source=cfg.audio_emotion_model,device=cfg.device)
+
         # visual is optional placeholder
         self.visual_model = VisualEmotionModel(cfg)
 

@@ -132,7 +132,7 @@ def download_youtube(
     # ------------------------------------------------------------------
     # 2. Convert → WAV (delegated)
     # ------------------------------------------------------------------
-    _converter.convert_to_wav(webm_path, wav_path, cfg)
+    wav_path = _converter.convert_to_wav(webm_path, dst=wav_path, cfg=cfg)
 
     if not wav_path.exists():
         raise FileNotFoundError("ffmpeg conversion did not produce WAV file")

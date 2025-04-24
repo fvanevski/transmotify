@@ -65,10 +65,10 @@ class TextEmotionModel:
         fallback entry indicating no analysis.
         """
         if not text or not text.strip():
-            return [_LABEL_FALLBACK]
+            return [_LABEL_FALLBACK]  # Wrap in list
 
         if self._pipe is None:
-            return [{"label": "analysis_failed", "score": 1.0}]
+            return [{"label": "analysis_failed", "score": 1.0}]  # Wrap in list
 
         try:
             result = self._pipe(text)
@@ -76,4 +76,4 @@ class TextEmotionModel:
             return result[0] if result else [_LABEL_FALLBACK]
         except Exception as exc:  # noqa: BLE001
             logger.error(f"Text emotion inference error: {exc}")
-            return [{"label": "analysis_failed", "score": 1.0}]
+            return [{"label": "analysis_failed", "score": 1.0}]  # Wrap in list

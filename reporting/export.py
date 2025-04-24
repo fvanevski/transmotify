@@ -13,9 +13,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Sequence
 
-from constants import (
-    SCRIPT_TRANSCRIPT_NAME,
+from constants import ( # type: ignore
     FINAL_ZIP_SUFFIX,
+    EMOTION_SUMMARY_JSON_NAME,
+    EMOTION_SUMMARY_CSV_NAME,
+    SCRIPT_TRANSCRIPT_NAME, # type: ignore
 )
 from core.logging import get_logger
 from utils.paths import ensure_dir

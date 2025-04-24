@@ -197,23 +197,36 @@ class WebApp:
                     min_block_time=self.cfg.speaker_labeling_min_block_time,
                     min_total_time=self.cfg.speaker_labeling_min_total_time,
                 )
-                for d in self.batch_results:
-                    self.session.add_item(
-                        item_id=d["artifact_dir"].name,
-                        segments=d["report_manifest"][
-                            "summary_json"
-                        ],  # path; we just need segments list – ok placeholder
-                        youtube_url=d["source"],
-                    )
-                # jump into first item / speaker
-                first = self.session.start(self.session.pending_items()[0])
-                spk_id, yt, starts = first  # type: ignore
+                items_added = 0
+                for item_data in self.batch_results:
+                    if item_data and item_data.get("processed_segments") and item_data.get("eligible_speakers"):
+                        self.session.add_item(
+                            item_id=item_data["artifact_dir"].name,
+                            segments=item_data["processed_segments"],
+                            youtube_url=item_data["metadata"].get("youtube_url", item_data.get("source")),
+                        )
+                        items_added += 1
+                    else:
+                        logger.warning(f"Skipping item due to missing data for labeling: {item_data.get('source')}")
+
+                if not items_added or not self.session.pending_items():
+                    yield {status_box: "Batch completed, but no items eligible for labeling.", **_ui_mode("finished")}
+                    return
+
+                # Start labeling with the first pending item
+                first_pending_id = self.session.pending_items()[0]
+                first_labeling_data = self.session.start(first_pending_id)
+                if first_labeling_data:
+                  spk_id, yt, starts = first_labeling_data  # type: ignore
+                
                 video = _youtube_embed(yt, starts[0] if starts else 0)
                 yield {
                     progress_md: f"Item 1 / Speaker 1 **{spk_id}**",
                     video_html: video,
                     **_ui_mode("labeling"),
                 }
+
+
 
             run_btn.click(
                 do_run,

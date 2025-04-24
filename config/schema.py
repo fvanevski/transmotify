@@ -17,7 +17,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal, Optional
 
-from pydantic import field_validator, Field
+from pydantic import field_validator, Field, ValidationInfo
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 try:
@@ -82,6 +82,15 @@ class Settings(BaseSettings):
     audio_fusion_weight: float = 0.4
 
     # ------------------------------------------------------------------
+    # FFmpeg parameters
+    # ------------------------------------------------------------------
+    ffmpeg_audio_channels: int = Field(
+        1, description="Target audio channels for ffmpeg conversion."
+    )
+    ffmpeg_audio_samplerate: int = Field(
+        16000, description="Target audio sample rate for ffmpeg conversion."
+    )
+    # ------------------------------------------------------------------
     # Output / report flags
     # ------------------------------------------------------------------
     include_json_summary: bool = True
@@ -117,13 +126,14 @@ class Settings(BaseSettings):
     # TODO[pydantic]: We couldn't refactor the `validator`, please replace it by `field_validator` manually.
     # Check https://docs.pydantic.dev/dev-v2/migration/#changes-to-validators for more information.
     @field_validator("audio_fusion_weight")
-    def _fusion_sum_to_one(cls, v: float, values):  # noqa: N805
-        text_w = values.get("text_fusion_weight", 0.0)
+    @classmethod # Keep classmethod if needed, or adjust if not
+    def _fusion_sum_to_one(cls, v: float, info: ValidationInfo):  # noqa: N805
+        # Access other field values via info.data
+        text_w = info.data.get("text_fusion_weight", 0.0)
         if abs(text_w + v - 1.0) > 1e-3:
             # Renormalise weights to sum to 1 while preserving ratio.
             total = text_w + v or 1.0
-            values["text_fusion_weight"] = text_w / total
             return v / total
-        return v
+        return v 
 
     model_config = SettingsConfigDict(env_prefix="SA_", env_file=".env")

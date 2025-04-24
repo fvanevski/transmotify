@@ -45,7 +45,7 @@ class Config(MutableMapping[str, Any]):
             json_path = Path(json_path)
             if json_path.exists():
                 logger.info("Loading config overrides from %s", json_path)
-                overrides = Settings.parse_file(json_path)
+                overrides = Settings.model_validate_json(json_path.read_text())
                 settings = settings.model_copy(
                     update=overrides.model_dump(exclude_unset=True)
                 )

@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Any, Dict, List, TypedDict, Final
 
 from core.logging import get_logger
+from constants import SCRIPT_TRANSCRIPT_NAME, INTERMEDIATE_STRUCTURED_TRANSCRIPT_NAME, FINAL_STRUCTURED_TRANSCRIPT_NAME
+
 
 logger = get_logger(__name__)
 
@@ -19,7 +21,7 @@ __all__: Final = [
     "Segment",
     "load_segments",
     "group_by_speaker",
-]
+] + [SCRIPT_TRANSCRIPT_NAME, INTERMEDIATE_STRUCTURED_TRANSCRIPT_NAME, FINAL_STRUCTURED_TRANSCRIPT_NAME]
 
 
 class Segment(TypedDict):
@@ -97,3 +99,4 @@ def group_by_speaker(segments: List[Segment]) -> List[dict[str, Any]]:
     blocks.append(accum)
     logger.info("Grouped %d segments into %d blocks", len(segments), len(blocks))
     return blocks
+

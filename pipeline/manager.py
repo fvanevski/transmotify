@@ -97,7 +97,7 @@ def run_pipeline(
         segments = load_segments(json_path)
 
         # 3) Multimodal emotion -----------------------------------------------------
-        segments = analyzer.run(segments, audio_path=wav_path, video_path="")
+        segments = analyzer.run(segments, audio_path=wav_path, video_path=None)
 
         # 4) Interactive speaker eligibility (optional) ----------------------------
         eligible: List[str] = []
@@ -115,6 +115,7 @@ def run_pipeline(
             {
                 "source": src,
                 "artifact_dir": item_dir,
+                "processed_segments": segments,
                 "report_manifest": report_manifest,
                 "eligible_speakers": eligible,
                 "metadata": meta,

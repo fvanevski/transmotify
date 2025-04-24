@@ -98,21 +98,17 @@ def convert_to_wav(
     src: Path,
     *,
     cfg,  # core.config.Config – imported via forward ref to avoid cycle
-    tmp_dir: Optional[Path] = None,
+    dst: Path
 ) -> Path:
     """Convert *src* audio file to 16‑kHz mono WAV and return the new path.
 
-    If *tmp_dir* is ``None`` the WAV lives next to *src* with a ``.wav`` suffix.
     """
     channels: int = int(getattr(cfg, "ffmpeg_audio_channels", 1))
     rate: int = int(getattr(cfg, "ffmpeg_audio_samplerate", 16000))
 
-    dst = (tmp_dir or src.parent) / f"{src.stem}.wav"
-
     logger.info("Converting %s → %s (ac=%d, ar=%d)", src.name, dst.name, channels, rate)
 
     _ffmpeg_to_wav(src, dst, channels=channels, rate=rate)
-
     if not dst.exists():
         raise ConverterError(f"ffmpeg reported success but {dst} not found")
 
