@@ -6,8 +6,7 @@ Helpers for making arbitrary Python data structures JSON‑serialisable.
 Currently focuses on numpy scalar promotion but is easily extensible.
 """
 
-from __future__ import annotations
-
+from __future__ import an
 from typing import Any
 
 import numpy as _np  # soft dependency; tiny import overhead

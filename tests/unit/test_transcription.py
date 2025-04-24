@@ -89,7 +89,7 @@ def _mock_run(cmd, **kwargs):  # noqa: D401  (simple helper)
 
 def test_transcribe_fallback(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     # Patch utils.subprocess.run used inside whisperx_wrapper
-    from speech_analysis import utils as _u  # dynamic import for patch path
+    import utils as _u  # dynamic import for patch path
 
     monkeypatch.setattr("transcription.whisperx_wrapper._run", _mock_run, raising=True)
 
