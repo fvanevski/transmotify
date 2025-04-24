@@ -1,4 +1,4 @@
-i a# utils/subprocess.py
+# utils/subprocess.py
 
 """utils.subprocess
 -----------------------------------
@@ -104,7 +104,7 @@ def run(
         with subprocess.Popen(
             safe_cmd,
             stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT, # Capture stderr to stdout stream
+            stderr=subprocess.STDOUT,  # Capture stderr to stdout stream
             cwd=cwd,
             text=text_mode,
             encoding=encoding,
@@ -113,8 +113,7 @@ def run(
         ) as proc:
             assert proc.stdout is not None  # for mypy
             for raw_line in proc.stdout:
-                line = raw_line.rstrip("
-")
+                line = raw_line.rstrip("")
                 # Log subprocess output at DEBUG level
                 logger.debug("Subprocess(%s): %s", safe_cmd[0], line)
 
@@ -137,8 +136,7 @@ def run(
         raise SubprocessError(str(fnf)) from None
     except Exception as exc:  # pragma: no cover – defensive
         logger.error(
-            "Unexpected error running command '%s': %s
-%s",
+            "Unexpected error running command '%s': %s %s",
             full_cmd,
             exc,
             traceback.format_exc(),
@@ -149,15 +147,21 @@ def run(
         # Include captured output in the error message if available
         output_detail = ""
         if captured_lines:
-            output_detail = "
+            output_detail = (
+                """
 Output:
-" + "
+"""
+                + """
 ".join(captured_lines[-10:]) # Last 10 lines
         msg = f"Command exited with status {return_code}: {full_cmd}{output_detail}"
         logger.error(msg)
         raise SubprocessError(msg)
 
     if capture_output:
-        return "
-".join(captured_lines)  # type: ignore[return-value]
+        return """
+            )
+
+
+""".join(captured_lines)  # type: ignore[return-value]
     return None
+"""

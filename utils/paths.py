@@ -19,6 +19,7 @@ logger = get_logger(__name__)
 __all__: Final = [
     "ensure_dir",
     "get_temp_file",
+    "find_unique_filename",
 ]
 
 
@@ -65,3 +66,22 @@ def get_temp_file(suffix: str = "") -> Path:  # noqa: D401 – Imperative helper
         tmp.close()
     logger.debug("Created temporary file: %s", tmp.name)
     return Path(tmp.name)
+
+
+def find_unique_filename(directory: str | Path, filename: str) -> Path:
+    """Find a unique filename in the given directory.
+
+    If the filename already exists, appends a counter in parentheses
+    before the extension (e.g., 'file (1).txt').
+    """
+    directory_path = Path(directory).expanduser().resolve()
+    base, ext = filename.rsplit(".", 1) if "." in filename else (filename, "")
+    counter = 0
+    unique_filename = filename
+    while (directory_path / unique_filename).exists():
+        counter += 1
+        if ext:
+            unique_filename = f"{base} ({counter}).{ext}"
+        else:
+            unique_filename = f"{base} ({counter})"
+    return directory_path / unique_filename

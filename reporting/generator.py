@@ -18,9 +18,7 @@ from typing import Dict, List
 
 from core.config import Config
 from core.logging import get_logger
-from constants import (
-    EMOTION_SUMMARY_JSON_NAME, EMOTION_SUMMARY_CSV_NAME
-)
+from constants import EMOTION_SUMMARY_JSON_NAME, EMOTION_SUMMARY_CSV_NAME
 from reporting import summaries as summ
 from reporting import plotting as pltg
 from reporting import export as exp
@@ -121,7 +119,7 @@ def generate_all(
         or cfg.include_plots
         or cfg.include_script_transcript
     ):
-        zip_path = exp.package_results(artifact_root, cfg)
+        zip_path = exp.package_results(artifact_root, manifest)
         manifest["bundle_zip"] = zip_path
 
     return manifest

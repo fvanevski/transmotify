@@ -73,7 +73,11 @@ class TextEmotionModel:
         try:
             result = self._pipe(text)
             # HF pipeline wraps results in an extra list dim
-            return result[0] if result else [_LABEL_FALLBACK]
+            # Convert list of dicts to a single dict {label: score}
+            if result and result[0]:
+                return {item["label"]: item["score"] for item in result[0]}
+            else:
+                return {_LABEL_FALLBACK["label"]: _LABEL_FALLBACK["score"]}
         except Exception as exc:  # noqa: BLE001
             logger.error(f"Text emotion inference error: {exc}")
-            return [{"label": "analysis_failed", "score": 1.0}]  # Wrap in list
+            return {"analysis_failed": 1.0}  # Return a dictionary in case of error

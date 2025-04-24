@@ -14,7 +14,7 @@ import torch
 from core.config import Config
 from core.logging import get_logger, init as setup_logging  # type: ignore
 
-from ui.interface import WebApp as build_ui  # NEW
+from ui.interface import App as build_ui  # NEW
 
 
 def main() -> None:

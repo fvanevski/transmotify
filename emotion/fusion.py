@@ -8,11 +8,13 @@ text & audio classifiers.
 
 from __future__ import annotations
 
+import logging
 from typing import Dict, Tuple
 
 from core.logging import get_logger
 
 logger = get_logger(__name__)
+logger.setLevel(logging.DEBUG)
 
 __all__ = ["fuse_weighted_average"]
 
@@ -39,6 +41,20 @@ def fuse_weighted_average(
     total = text_weight + audio_weight
     text_w = text_weight / total
     audio_w = audio_weight / total
+
+    logger.debug(f"text_probs type: {type(text_probs)}, content: {text_probs}")
+    logger.debug(f"audio_probs type: {type(audio_probs)}, content: {audio_probs}")
+
+    if not isinstance(text_probs, dict) or not isinstance(audio_probs, dict):
+        logger.error(
+            f"Expected dict for emotion probabilities, but got text_probs type: {type(text_probs)}, audio_probs type: {type(audio_probs)}"
+        )
+        # Return default values or raise a more specific error
+        return (
+            "unknown",
+            0.0,
+            {},
+        )  # Assuming the function should return label, confidence, and fused probabilities
 
     labels = set(text_probs) | set(audio_probs)
     fused: Dict[str, float] = {}
