@@ -28,7 +28,7 @@ from typing import List, Dict, Any, Tuple, Final
 from rapidfuzz import fuzz
 
 from core.logging import get_logger
-from constants import DEFAULT_SNIPPET_MATCH_THRESHOLD # Updated import
+from constants import DEFAULT_SNIPPET_MATCH_THRESHOLD  # Updated import
 from transcription.segments import (
     Segment,
     SegmentsList,
@@ -77,7 +77,15 @@ def identify_eligible_speakers(
     # Map speaker → list of dialogue blocks
     speaker_blocks: dict[str, List[Segment]] = defaultdict(list)
     for block in group_segments_by_speaker(segments):
-        speaker_blocks[str(block["speaker"])].append(block)
+        # Create a Segment object from the block dictionary to match the expected type
+        segment_block: Segment = {
+            "start": block.get("start"),
+            "end": block.get("end"),
+            "text": block.get("text", ""),
+            "speaker": str(block.get("speaker", "unknown")),
+            "words": [],  # Grouped blocks don't have words, provide an empty list
+        }
+        speaker_blocks[segment_block["speaker"]].append(segment_block)
 
     eligible: list[tuple[str, float]] = []
     for spk, total in speaker_total.items():
@@ -150,7 +158,8 @@ def select_preview_time_segments(
     if len(starts) == 1 and len(blocks) > 1:
         starts.append(math.floor(blocks[0]["start"]))
     logger.info("Preview starts for %s: %s", speaker_id, starts)
-    return starts[:3]
+    # Convert floats to integers before returning to match the return type annotation
+    return [int(s) for s in starts[:3]]
 
 
 # ---------------------------------------------------------------------------
@@ -190,7 +199,8 @@ def match_snippets_to_speakers(
 
     for user_name, snippet in speaker_snippet_map.items():
         base = _norm(snippet)
-        best_score, best_id = -1.0, None
+        # Initialize best_id as an empty string to match the expected key type for speaker_best
+        best_score, best_id = -1.0, ""
         for blk in blocks:
             sid, text = blk["speaker"], blk["text"]
             score = fuzz.partial_ratio(base, _norm(text))

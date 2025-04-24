@@ -16,12 +16,21 @@ setuptools.setup(
     # --- Dependencies ---
     # List your project's dependencies required for installation
     install_requires=[
-        # Examples based on your previous comments.
-        # List ALL libraries your project needs to run here.
-        # 'pytest', # pytest is usually a dev/test dependency, not required for runtime
-        # 'rich',   # rich might or might not be required for runtime
-        # Add actual dependencies here, e.g.:
-        "requests>=2.28.1",  # Example dependency
+        "pydantic>=2.0",
+        "pydantic-settings>=2.0",
+        "torch",
+        "torchaudio",
+        "transformers",  # Check specific version requirements
+        "speechbrain",  # Check specific version requirements
+        # "whisperx @ git+https://github.com/m-bain/whisperX.git@main", # Example for git install
+        "openai-whisper",  # WhisperX often depends on the base whisper library
+        "yt-dlp",
+        "gradio",
+        "pandas",  # Needed for UI excel reading and optional CSV saving
+        "numpy",
+        "matplotlib",  # Needed for plotting
+        "rapidfuzz",  # Needed for labeling selector
+        # Add any other direct dependencies identified
         # Any libraries your 'io' module or other parts of the project import
     ],
     # --- Metadata (Highly Recommended) ---

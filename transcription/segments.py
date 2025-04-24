@@ -1,27 +1,17 @@
 # transcription/segments.py
 
-"""transcription.segments
----------------------------------------
-Utility functions that operate on the WhisperX JSON transcript structure.
-"""
-
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List, TypedDict, Final
+from typing import Any, Dict, List, TypedDict, Final  # Keep Final if desired
+
+# Assuming these constants are imported or defined above
+# from constants import SCRIPT_TRANSCRIPT_NAME, ... # Or however they are accessed
 
 from core.logging import get_logger
-from constants import SCRIPT_TRANSCRIPT_NAME, INTERMEDIATE_STRUCTURED_TRANSCRIPT_NAME, FINAL_STRUCTURED_TRANSCRIPT_NAME
-
 
 logger = get_logger(__name__)
-
-__all__: Final = [
-    "Segment",
-    "load_segments",
-    "group_by_speaker",
-] + [SCRIPT_TRANSCRIPT_NAME, INTERMEDIATE_STRUCTURED_TRANSCRIPT_NAME, FINAL_STRUCTURED_TRANSCRIPT_NAME]
 
 
 class Segment(TypedDict):
@@ -32,8 +22,26 @@ class Segment(TypedDict):
     words: List[dict[str, Any]]
 
 
+# Define the type alias HERE
+SegmentsList = List[Segment]
+
+# Define __all__ statically
+__all__: Final = [
+    "Segment",
+    "SegmentsList",  # <--- Add the alias here
+    "SegmentsList",
+    "load_segments",
+    "group_segments_by_speaker",  # Corrected name based on previous analysis
+    # You *can* include constants below, but consider if they are truly part of the public API
+    # Often, __all__ is reserved for functions and classes.
+    # "SCRIPT_TRANSCRIPT_NAME",
+    # "INTERMEDIATE_STRUCTURED_TRANSCRIPT_NAME",
+    # "FINAL_STRUCTURED_TRANSCRIPT_NAME",
+]
+
+
 def load_segments(json_path: Path) -> List[Segment]:
-    """Read WhisperX JSON file and return a validated list of segments."""
+    # ... (rest of the function) ...
     if not json_path.is_file():
         raise FileNotFoundError(json_path)
 
@@ -68,7 +76,8 @@ def load_segments(json_path: Path) -> List[Segment]:
     return cleaned
 
 
-def group_by_speaker(segments: List[Segment]) -> List[dict[str, Any]]:
+# Renamed function based on previous analysis
+def group_segments_by_speaker(segments: List[Segment]) -> List[dict[str, Any]]:
     """Collapse consecutive segments with same speaker into contiguous blocks."""
     if not segments:
         return []
@@ -99,4 +108,3 @@ def group_by_speaker(segments: List[Segment]) -> List[dict[str, Any]]:
     blocks.append(accum)
     logger.info("Grouped %d segments into %d blocks", len(segments), len(blocks))
     return blocks
-

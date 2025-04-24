@@ -2,6 +2,7 @@ setup.py
 io/__init__.py
 io/converter.py
 io/downloader.py
+tests/test_labeling.py
 transmotify.egg-info/PKG-INFO
 transmotify.egg-info/SOURCES.txt
 transmotify.egg-info/dependency_links.txt

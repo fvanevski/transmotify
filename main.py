@@ -33,7 +33,7 @@ def main() -> None:
     # Config + logging
     # ---------------------------------------------------------
     cfg = Config()
-    setup_logging(cfg.config)
+    setup_logging(cfg)
     logger = get_logger(__name__)
 
     if not cfg.get("hf_token"):
