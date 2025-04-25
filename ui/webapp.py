@@ -115,7 +115,7 @@ def get_youtube_embed_html(youtube_url: str, start_time_seconds: int = 0) -> str
 
 # --- Main UI Class ---
 # ***** CORRECTED: Class definition moved to top level *****
-class WebApp:
+class UI:
     """Manages the Gradio interface and its interactions with the Orchestrator."""
 
     # --- MODIFIED: Accepts Orchestrator instance ---
