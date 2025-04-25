@@ -93,9 +93,9 @@ def fuse_emotions(
 
             # Map to aligned label if possible
             if label in TEXT_TO_ALIGNED_MAP:
-                aligned_text_probs[TEXT_TO_ALIGNED_MAP[label]] += (
-                    score  # Sum scores if multiple map to same aligned label
-                )
+                aligned_text_probs[
+                    TEXT_TO_ALIGNED_MAP[label]
+                ] += score  # Sum scores if multiple map to same aligned label
             elif label in TEXT_ONLY_LABELS:
                 text_only_raw_probs[label] = score  # Store raw score for text-only
 

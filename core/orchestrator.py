@@ -516,7 +516,9 @@ class Orchestrator:
                             log_info(
                                 f"{item_log_prefix} Skipping visual emotion analysis for YouTube URL (no local video file)."
                             )
-                            visual_emotion_map = {}  # Ensure it's an empty dict, not None
+                            visual_emotion_map = (
+                                {}
+                            )  # Ensure it's an empty dict, not None
                         # else: # Local file but not identified as video
                         # log_info(f"{item_log_prefix} Skipping visual emotion analysis for local file (not identified as video).")
                         # visual_emotion_map = {}
@@ -620,9 +622,9 @@ class Orchestrator:
                             and audio_input_path.is_file()
                         ):
                             arc_name = f"{item_identifier}/{audio_input_path.name}"
-                            self.batch_output_files[batch_job_id][arc_name] = (
-                                audio_input_path
-                            )
+                            self.batch_output_files[batch_job_id][
+                                arc_name
+                            ] = audio_input_path
                     else:
                         log_info(
                             f"{item_log_prefix} Labeling enabled, but no eligible speakers."
@@ -674,9 +676,9 @@ class Orchestrator:
 
             # Store labeling order, check overall status... (same as before)
             if labeling_is_required_overall:
-                self.labeling_state[batch_job_id]["items_requiring_labeling_order"] = (
-                    items_requiring_labeling_list
-                )
+                self.labeling_state[batch_job_id][
+                    "items_requiring_labeling_order"
+                ] = items_requiring_labeling_list
             total_processed_or_pending = (
                 processed_immediately_count + pending_labeling_count
             )

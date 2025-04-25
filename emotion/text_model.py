@@ -3,7 +3,7 @@
 Handles loading and running text-based emotion classification models.
 """
 
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Union
 
 # Assuming core.logging is available
 try:
@@ -12,7 +12,8 @@ except ImportError:
     log_info = log_warning = log_error = print
 
 try:
-    from transformers import pipeline, Pipeline
+    from transformers.pipelines import pipeline
+    from transformers.pipelines.base import Pipeline
 
     TRANSFORMERS_AVAILABLE = True
 except ImportError:
@@ -60,13 +61,20 @@ class TextEmotionModel:
             if self.device_arg is not None:
                 pipeline_args["device"] = self.device_arg
 
-            self.classifier = pipeline("text-classification", **pipeline_args)
-            resolved_device = (
-                self.classifier.device
-            )  # Get actual device used by pipeline
-            log_info(
-                f"Text emotion classifier loaded successfully on device: {resolved_device}."
-            )
+            if TRANSFORMERS_AVAILABLE:
+                self.classifier = pipeline("text-classification", **pipeline_args)
+            else:
+                self.classifier = None
+
+            # Check if classifier was successfully initialized before accessing device
+            if self.classifier:
+                resolved_device = (
+                    self.classifier.device
+                )  # Get actual device used by pipeline
+                log_info(
+                    f"Text emotion classifier loaded successfully on device: {resolved_device}."
+                )
+            # No else needed here as the except block handles initialization failure
 
         except Exception as e:
             log_error(

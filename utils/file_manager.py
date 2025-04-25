@@ -11,6 +11,11 @@ import zipfile
 import traceback
 from pathlib import Path
 from typing import List, Optional, TextIO, Union, Dict, Any
+from config.config import (
+    Config,
+)  # Assuming config.py is in the same directory as this module
+
+# Importing Config from config.py, assuming it contains necessary configuration settings
 
 # Assuming core.logging is established from Phase 1
 try:
@@ -25,6 +30,10 @@ except ImportError:
 
     def log_info(message: str):
         print(f"INFO (logging unavailable): {message}")
+
+
+def __init__(self, config: Config):
+    self.config = config
 
 
 # Moved from core/utils.py
@@ -51,7 +60,16 @@ def get_temp_file_path(suffix: str = "") -> Optional[Path]:
         # Note: This creates a file in the system's default temp location,
         # NOT necessarily within the project's configured temp_dir.
         # Consider adding a version that takes a base directory if needed.
-        temp_file = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+        config = Config()  # Instantiate Config
+        config_temp_dir = Path(config.get("temp_dir", "./temp"))
+        log_info(f"Using temporary directory: {config_temp_dir}")
+        # Ensure the temp directory exists
+        if not config_temp_dir.exists():
+            log_warning(
+                f"Temporary directory does not exist: {config_temp_dir}. Creating it."
+            )
+            create_directory(config_temp_dir)
+        temp_file = tempfile.mkstemp(dir=config_temp_dir, suffix=suffix)
         temp_file_path: Path = Path(temp_file.name)
         temp_file.close()
         log_info(f"Created temporary file: {temp_file_path}")
