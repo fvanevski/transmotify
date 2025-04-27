@@ -15,14 +15,23 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, TextIO, Tuple, Union, cast  # Added cast
+import logging
+from core.errors import (
+    TransmotifyError,
+    PipelineStageError,
+    ConfigurationError,
+    InputDataError,
+    ProcessingError,
+    ResourceAccessError,
+)
+
+logger = logging.getLogger(__name__)
 
 # --- Core Components ---
 from core.logging import log_error, log_info, log_warning  # Moved outside try
 
 try:
     from config.config import Config
-
-    # from core.logging import log_error, log_info, log_warning # Removed from here
     from utils.file_manager import (
         create_directory,
         get_temp_file_path,
@@ -61,8 +70,8 @@ try:
     # Add missing transcript types
     from utils.transcripts import SegmentsList, Segment
 except ImportError as e:
-    log_error(f"Orchestrator failed to import core components: {e}")
-    raise RuntimeError(f"Orchestrator failed to import core components: {e}") from e
+    logger.error(f"Orchestrator failed to import core components: {e}", exc_info=True)
+    raise ResourceAccessError(f"Orchestrator failed to import core components: {e}") from e
 
 # Type Aliases (Consider moving to a types file if complex)
 # LabelingState = Dict[str, Dict[str, Any]]  # Removed duplicate definition
@@ -85,9 +94,9 @@ class Orchestrator:
         # self.config: Dict[str, Any] = config.config # Removed redundant assignment
         self.labeling_state: LabelingState = {}
         self.batch_output_files: Dict[str, Dict[str, Path]] = {}
-        log_info("Orchestrator: Initializing emotion models...")
+        logger.info("Orchestrator: Initializing emotion models...")
         self._init_emotion_models()
-        log_info("Orchestrator initialized.")
+        logger.info("Orchestrator initialized.")
 
     def _init_emotion_models(self):
         """Helper to initialize emotion model instances."""
@@ -124,7 +133,7 @@ class Orchestrator:
     def _save_json_summary(
         self, summary_data: Dict, output_path: Path, log_prefix: str
     ) -> Optional[Path]:
-        log_info(
+        logger.info(
             f"{log_prefix} Attempting to save detailed emotion summary JSON to: {output_path}"
         )
         try:
@@ -133,26 +142,25 @@ class Orchestrator:
                 json.dumps(summary_serializable, indent=2, ensure_ascii=False),
                 output_path,
             ):
-                log_info(
+                logger.info(
                     f"{log_prefix} Detailed emotion summary JSON saved successfully."
                 )
                 return output_path
             else:
-                log_error(
+                logger.error(
                     f"{log_prefix} Failed to save emotion summary JSON using file manager."
                 )
                 return None
         except Exception as e:
-            log_error(
+            logger.exception(
                 f"{log_prefix} Failed to serialize or save emotion summary JSON to {output_path}: {e}"
             )
-            log_error(traceback.format_exc())
             return None
 
     def _save_csv_summary(
         self, summary_data: EmotionSummary, output_path: Path, log_prefix: str
     ) -> Optional[Path]:
-        log_info(
+        logger.info(
             f"{log_prefix} Attempting to save high-level emotion summary CSV to: {output_path}"
         )
         try:
@@ -207,20 +215,19 @@ class Orchestrator:
                             pass
                 writer.writerow(row_data)
             if save_text_file(output.getvalue(), output_path):
-                log_info(
+                logger.info(
                     f"{log_prefix} High-level emotion summary CSV saved successfully."
                 )
                 return output_path
             else:
-                log_error(
+                logger.error(
                     f"{log_prefix} Failed to save emotion summary CSV using file manager."
                 )
                 return None
         except Exception as e:
-            log_error(
+            logger.exception(
                 f"{log_prefix} Failed to generate or save emotion summary CSV to {output_path}: {e}"
             )
-            log_error(traceback.format_exc())
             return None
 
     # --- Main Batch Processing Method ---
@@ -237,7 +244,7 @@ class Orchestrator:
             f"batch-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%f')[:-3]}"
         )
         log_prefix = self._get_log_prefix(batch_job_id)
-        log_info(f"{log_prefix} Starting batch processing for: {input_source}")
+        logger.info(f"{log_prefix} Starting batch processing for: {input_source}")
 
         # Initialize state, paths, counters... (same as before)
         batch_status_message = f"{log_prefix} Reading batch definition..."
@@ -269,37 +276,36 @@ class Orchestrator:
         try:
             # Create work dir, setup logging... (same as before)
             if not create_directory(batch_work_path):
-                raise RuntimeError(
+                raise ResourceAccessError(
                     f"Failed to create batch work directory: {batch_work_path}"
                 )
             batch_log_path = batch_work_path / self.config.get(
                 "log_file_name", "process_log.txt"
             )
             log_file_handle = open(batch_log_path, "w", encoding="utf-8")
-            log_info(f"{log_prefix} Batch log file created at: {batch_log_path}")
+            logger.info(f"{log_prefix} Batch log file created at: {batch_log_path}")
             self.batch_output_files[batch_job_id][batch_log_path.name] = batch_log_path
 
             # Read Input Source (XLSX assumed for now)... (same as before)
             if not Path(input_source).is_file() or not str(input_source).endswith(
                 ".xlsx"
             ):
-                raise ValueError(
+                raise InputDataError(
                     f"Invalid input source. Expecting an XLSX file path: {input_source}"
                 )
-            log_info(f"{log_prefix} Reading batch file: {input_source}")
+            logger.info(f"{log_prefix} Reading batch file: {input_source}")
             try:
                 df = pd.read_excel(input_source, sheet_name=0)
                 total_items = len(df)
                 url_col_name = df.columns[0]
                 if df.empty:
                     raise ValueError("Excel file contains no data rows.")
-                log_info(
+                logger.info(
                     f"{log_prefix} Read {total_items} rows. Using column '{url_col_name}'."
                 )
             except Exception as e:
-                raise ValueError(
-                    f"Failed to read or parse Excel file {input_source}: {e}"
-                ) from e
+                logger.exception(f"{log_prefix} Failed to read Excel file: {e}")
+                raise InputDataError(f"Failed to read Excel file: {input_source}") from e
 
             # Get labeling config... (same as before)
             enable_labeling = self.config.get("enable_interactive_labeling", False)
@@ -309,7 +315,7 @@ class Orchestrator:
             labeling_min_block_time = float(
                 self.config.get("speaker_labeling_min_block_time", 10.0)
             )
-            log_info(f"{log_prefix} Interactive Labeling Enabled: {enable_labeling}")
+            logger.info(f"{log_prefix} Interactive Labeling Enabled: {enable_labeling}")
             items_requiring_labeling_list = []
 
             # --- Item Processing Loop ---
@@ -322,7 +328,7 @@ class Orchestrator:
                     f"item_{item_index:03d}"  # Use enumerate index directly
                 )
                 item_log_prefix = self._get_log_prefix(batch_job_id, item_identifier)
-                log_info(
+                logger.info(
                     f"{item_log_prefix} --- Processing item {item_index}/{total_items} ---"
                 )
 
@@ -332,7 +338,7 @@ class Orchestrator:
                     not isinstance(source_url_or_path, str)
                     or not source_url_or_path.strip()
                 ):
-                    log_warning(
+                    logger.warning(
                         f"{item_log_prefix} Skipping row {item_index}: Invalid or missing source."
                     )
                     batch_results_list.append(
@@ -347,7 +353,7 @@ class Orchestrator:
                 # Create item work dir... (same as before)
                 item_work_path = batch_work_path / item_identifier
                 if not create_directory(item_work_path):
-                    log_error(
+                    logger.error(
                         f"{item_log_prefix} Failed to create item work directory. Skipping."
                     )
                     failed_count += 1
@@ -369,7 +375,7 @@ class Orchestrator:
                     raw_dl_path = temp_audio_dir / f"raw_download_{item_identifier}"
                     final_wav_path = item_work_path / f"audio_{item_identifier}.wav"
                     if is_youtube_url:
-                        log_info(f"{item_log_prefix} Downloading YouTube stream...")
+                        logger.info(f"{item_log_prefix} Downloading YouTube stream...")
                         dl_stream_path = download_youtube_stream(
                             youtube_url=source_url_or_path,
                             output_path=raw_dl_path,
@@ -381,7 +387,7 @@ class Orchestrator:
                         )
                         if not dl_stream_path:
                             raise RuntimeError("YouTube download failed.")
-                        log_info(f"{item_log_prefix} Converting to WAV...")
+                        logger.info(f"{item_log_prefix} Converting to WAV...")
                         audio_input_path = convert_to_wav(
                             input_path=dl_stream_path,
                             output_path=final_wav_path,
@@ -395,16 +401,16 @@ class Orchestrator:
                         if not audio_input_path:
                             raise RuntimeError("Audio conversion failed.")
                         dl_stream_path.unlink(missing_ok=True)
-                        log_info(f"{item_log_prefix} Fetching metadata...")
+                        logger.info(f"{item_log_prefix} Fetching metadata...")
                         metadata = fetch_youtube_metadata(
                             youtube_url=source_url_or_path, log_prefix=item_log_prefix
                         )
                         if metadata:
                             metadata["prepared_audio_path"] = str(audio_input_path)
                         else:
-                            log_warning(f"{item_log_prefix} Failed to fetch metadata.")
+                            logger.warning(f"{item_log_prefix} Failed to fetch metadata.")
                     elif is_local_file:
-                        log_info(f"{item_log_prefix} Processing local file...")
+                        logger.info(f"{item_log_prefix} Processing local file...")
                         audio_input_path = convert_to_wav(
                             input_path=source_url_or_path,
                             output_path=final_wav_path,
@@ -435,7 +441,7 @@ class Orchestrator:
                     if not check_audio_duration(
                         audio_input_path, min_duration, item_log_prefix
                     ):
-                        log_warning(f"{item_log_prefix} Audio duration too short.")
+                        logger.warning(f"{item_log_prefix} Audio duration too short.")
 
                     # 3. Run ASR (WhisperX)... (same as before)
                     asr_output_dir = item_work_path / "asr_output"
@@ -473,13 +479,13 @@ class Orchestrator:
                     # 4. Structure Transcript... (same as before)
                     segments = convert_json_to_structured(whisperx_json_path)
                     if not segments:
-                        log_warning(
+                        logger.warning(
                             f"{item_log_prefix} No segments found after structuring ASR output."
                         )
 
                     # 5. Run Emotion Analysis & Fusion (if segments exist)
                     if segments:
-                        log_info(
+                        logger.info(
                             f"{item_log_prefix} Running emotion analysis for {len(segments)} segments..."
                         )
                         processed_segments = []
@@ -504,7 +510,7 @@ class Orchestrator:
 
                         if video_path_for_visual:
                             # Only run visual analysis if we have a local video file path
-                            log_info(
+                            logger.info(
                                 f"{item_log_prefix} Running visual emotion analysis on local file: {video_path_for_visual.name}"
                             )
                             visual_emotion_map = (
@@ -513,7 +519,7 @@ class Orchestrator:
                                 )
                             )
                         elif is_youtube_url:
-                            log_info(
+                            logger.info(
                                 f"{item_log_prefix} Skipping visual emotion analysis for YouTube URL (no local video file)."
                             )
                             visual_emotion_map = (
@@ -556,11 +562,11 @@ class Orchestrator:
                             seg["fused_emotion_confidence"] = fused_conf
                             seg["significant_text_emotions"] = sig_text
                             processed_segments.append(seg)
-                        log_info(
+                        logger.info(
                             f"{item_log_prefix} Emotion analysis and fusion complete."
                         )
                     else:  # No segments
-                        log_warning(
+                        logger.warning(
                             f"{item_log_prefix} Skipping emotion analysis due to missing segments."
                         )
                         processed_segments = (
@@ -573,8 +579,8 @@ class Orchestrator:
                     err_msg = (
                         f"{item_log_prefix} ERROR during item processing pipeline: {e}"
                     )
-                    log_error(err_msg)
-                    log_error(traceback.format_exc())
+                    logger.error(err_msg)
+                    logger.exception(traceback.format_exc())
                     if log_file_handle:
                         log_file_handle.write(f"{err_msg}\n{traceback.format_exc()}\n")
                     batch_results_list.append(
@@ -603,7 +609,7 @@ class Orchestrator:
                         batch_results_list.append(
                             f"[{item_identifier}] Success (Pending Labeling)"
                         )
-                        log_info(
+                        logger.info(
                             f"{item_log_prefix} Item requires labeling: {eligible_speakers}"
                         )
                         self.labeling_state[batch_job_id][item_identifier] = {
@@ -626,17 +632,17 @@ class Orchestrator:
                                 arc_name
                             ] = audio_input_path
                     else:
-                        log_info(
+                        logger.info(
                             f"{item_log_prefix} Labeling enabled, but no eligible speakers."
                         )
                 elif enable_labeling:
-                    log_info(
+                    logger.info(
                         f"{item_log_prefix} Labeling enabled, but not YT URL or no segments."
                     )
 
                 # Finalize Immediately or Defer... (same logic as before)
                 if not needs_labeling:
-                    log_info(f"{item_log_prefix} Finalizing item immediately.")
+                    logger.info(f"{item_log_prefix} Finalizing item immediately.")
                     try:
                         finalized_files = self._finalize_batch_item(
                             batch_job_id=batch_job_id,
@@ -654,11 +660,8 @@ class Orchestrator:
                         batch_results_list.append(
                             f"[{item_identifier}] Success (Finalized)"
                         )
-                    except Exception as final_e:
-                        log_error(
-                            f"{item_log_prefix} Immediate finalization failed: {final_e}"
-                        )
-                        log_error(traceback.format_exc())
+                    except Exception as e:
+                        logger.exception(f"{item_log_prefix} Error during immediate finalization: {e}")
                         batch_results_list.append(
                             f"[{item_identifier}] Failed: Finalization error."
                         )
@@ -669,7 +672,7 @@ class Orchestrator:
                             except Exception:
                                 pass  # Ignore errors during cleanup
 
-                log_info(
+                logger.info(
                     f"{item_log_prefix} --- Finished item {item_index}/{total_items} ---"
                 )
             # --- End of Item Loop ---
@@ -682,7 +685,7 @@ class Orchestrator:
             total_processed_or_pending = (
                 processed_immediately_count + pending_labeling_count
             )
-            log_info(
+            logger.info(
                 f"{log_prefix} Batch loop complete. Finalized: {processed_immediately_count}, Pending: {pending_labeling_count}, Failed: {failed_count}"
             )
             if total_processed_or_pending == 0 and failed_count > 0:
@@ -693,7 +696,7 @@ class Orchestrator:
                 batch_status_message = f"{log_prefix} Initial processing complete. {pending_labeling_count} item(s) require labeling."
                 return_batch_id: Optional[str] = batch_job_id
             else:
-                log_info(f"{log_prefix} No labeling needed. Creating final ZIP.")
+                logger.info(f"{log_prefix} No labeling needed. Creating final ZIP.")
                 permanent_output_dir = Path(self.config.get("output_dir", "./output"))
                 zip_suffix = self.config.get("final_zip_suffix", "_final_bundle.zip")
                 master_zip_name = f"{batch_job_id}_batch_results{zip_suffix}"
@@ -714,12 +717,12 @@ class Orchestrator:
                     else f"{log_prefix} ❗️ Batch finished, but ZIP creation failed."
                 )
                 return_batch_id = None
-            log_info(f"{log_prefix} Batch Status: {batch_status_message}")
+            logger.info(f"{log_prefix} Batch Status: {batch_status_message}")
 
         # Exception Handling... (same general structure as before)
-        except (FileNotFoundError, ValueError, RuntimeError) as e:
+        except (FileNotFoundError, ValueError, ResourceAccessError, InputDataError) as e:
             err_msg = f"{log_prefix} BATCH ERROR: {e}"
-            log_error(err_msg)
+            logger.error(err_msg)
             if log_file_handle:
                 log_file_handle.write(f"{err_msg}\n")
             batch_status_message = err_msg
@@ -730,7 +733,7 @@ class Orchestrator:
                 del self.labeling_state[batch_job_id]
         except Exception as e:
             err_msg = f"{log_prefix} UNEXPECTED BATCH ERROR: {e}"
-            log_error(err_msg + "\n" + traceback.format_exc())
+            logger.exception(err_msg)
             if log_file_handle:
                 log_file_handle.write(f"{err_msg}\n{traceback.format_exc()}\n")
             batch_status_message = err_msg
@@ -739,7 +742,6 @@ class Orchestrator:
                 del self.batch_output_files[batch_job_id]
             if batch_job_id in self.labeling_state:
                 del self.labeling_state[batch_job_id]
-
         finally:
             # Close log, batch cleanup... (same logic as before)
             should_close_log = (
@@ -748,15 +750,15 @@ class Orchestrator:
                 and not labeling_is_required_overall
             )
             if should_close_log:
-                log_info(f"{log_prefix} Closing batch log file.")
-                if log_file_handle:  # Add extra check to satisfy linter
+                logger.info(f"{log_prefix} Closing batch log file.")
+                if log_file_handle:
                     log_file_handle.close()
             elif (
                 log_file_handle
                 and not log_file_handle.closed
                 and labeling_is_required_overall
             ):
-                log_info(f"{log_prefix} Keeping batch log open.")
+                logger.info(f"{log_prefix} Keeping batch log open.")
             cleanup_temp = self.config.get("cleanup_temp_on_success", True)
             batch_finished_without_labeling = (return_batch_id is None) and (
                 total_processed_or_pending > 0 or failed_count == total_items
@@ -769,15 +771,15 @@ class Orchestrator:
             )
             if batch_work_path.exists():
                 if should_cleanup and not labeling_is_required_overall:
-                    log_info(
+                    logger.info(
                         f"{log_prefix} Cleaning up batch temp dir: {batch_work_path}"
                     )
                     if not cleanup_directory(batch_work_path, recreate=False):
-                        log_warning(f"{log_prefix} Failed remove batch temp dir.")
+                        logger.warning(f"{log_prefix} Failed remove batch temp dir.")
                 elif labeling_is_required_overall:
-                    log_info(f"{log_prefix} Keeping batch temp dir: {batch_work_path}")
+                    logger.info(f"{log_prefix} Keeping batch temp dir: {batch_work_path}")
                 else:
-                    log_warning(
+                    logger.warning(
                         f"{log_prefix} Skipping cleanup of batch temp dir: {batch_work_path}"
                     )
 
@@ -793,7 +795,7 @@ class Orchestrator:
             + f"\n--------------------\nOverall Status: {batch_status_message}"
         )
 
-        return batch_status_message, results_summary_string, return_batch_id
+        return batch_status_message, "\n".join(batch_results_list), return_batch_id
 
     # --- Internal Helper for Finalizing Items ---
     # (No changes needed in this method based on the clarification)
@@ -810,7 +812,7 @@ class Orchestrator:
     ) -> Optional[Dict[str, Union[Path, List[Path]]]]:
         # ... (previous implementation of _finalize_batch_item remains the same) ...
         item_log_prefix = self._get_log_prefix(batch_job_id, item_identifier)
-        log_info(f"{item_log_prefix} Starting finalization...")
+        logger.info(f"{item_log_prefix} Starting finalization...")
         item_output_dir = item_work_path / "output"
         create_directory(item_output_dir)
         generated_files: Dict[str, Union[Path, List[Path]]] = {}
@@ -832,7 +834,7 @@ class Orchestrator:
             ):
                 generated_files["final_structured_json"] = final_json_path
             else:
-                log_error(
+                logger.error(
                     f"{item_log_prefix} Failed to save final structured transcript."
                 )
             # Explicitly cast to Dict[str, bool] to help Pylance with the Union type
@@ -847,7 +849,7 @@ class Orchestrator:
             include_audio = batch_flags.get("include_audio", False)
             summary_data: Optional[EmotionSummary] = None
             if include_json or include_csv or include_plots:
-                log_info(f"{item_log_prefix} Calculating emotion summary...")
+                logger.info(f"{item_log_prefix} Calculating emotion summary...")
                 summary_data = calculate_emotion_summary(
                     segments=relabeled_segments,
                     emotion_value_map=self.config.get("emotion_value_map", {}),
@@ -855,7 +857,7 @@ class Orchestrator:
                     log_prefix=item_log_prefix,
                 )
                 if not summary_data:
-                    log_warning(
+                    logger.warning(
                         f"{item_log_prefix} Emotion summary calculation yielded no data."
                     )
             if include_json and summary_data:
@@ -883,7 +885,7 @@ class Orchestrator:
                 if saved_path:
                     generated_files["script_path"] = saved_path
             if include_plots and summary_data:
-                log_info(f"{item_log_prefix} Generating plots...")
+                logger.info(f"{item_log_prefix} Generating plots...")
                 plot_output_dir = item_output_dir / "plots"
                 create_directory(plot_output_dir)
                 plot_paths = generate_all_plots(
@@ -919,11 +921,11 @@ class Orchestrator:
                 self.batch_output_files[batch_job_id][
                     f"{item_identifier}/{audio_path.name}"
                 ] = audio_path
-            log_info(f"{item_log_prefix} Finalization complete.")
+            logger.info(f"{item_log_prefix} Finalization complete.")
             return generated_files
         except Exception as e:
-            log_error(
-                f"{item_log_prefix} Unexpected error during finalization: {e}\n{traceback.format_exc()}"
+            logger.exception(
+                f"{item_log_prefix} Unexpected error during finalization: {e}"
             )
             return None
 
@@ -934,10 +936,10 @@ class Orchestrator:
     ) -> Optional[Tuple[str, str, List[int]]]:
         # ... (previous implementation) ...
         log_prefix = self._get_log_prefix(batch_job_id, item_identifier)
-        log_info(f"{log_prefix} UI Request: Start labeling item.")
+        logger.info(f"{log_prefix} UI Request: Start labeling item.")
         item_state = self.labeling_state.get(batch_job_id, {}).get(item_identifier)
         if not item_state or not isinstance(item_state, dict):
-            log_error(f"{log_prefix} Item state invalid.")
+            logger.error(f"{log_prefix} Item state invalid.")
             return None
         labeling_config = {
             "speaker_labeling_preview_duration": self.config.get(
@@ -958,10 +960,10 @@ class Orchestrator:
     ) -> bool:
         # ... (previous implementation) ...
         log_prefix = self._get_log_prefix(batch_job_id, item_identifier)
-        log_info(f"{log_prefix} UI Request: Store label {speaker_id} = '{user_label}'.")
+        logger.info(f"{log_prefix} UI Request: Store label {speaker_id} = '{user_label}'.")
         item_state = self.labeling_state.get(batch_job_id, {}).get(item_identifier)
         if not item_state or not isinstance(item_state, dict):
-            log_error(f"{log_prefix} Item state invalid.")
+            logger.error(f"{log_prefix} Item state invalid.")
             return False
         return store_speaker_label(
             item_state=item_state,
@@ -975,12 +977,12 @@ class Orchestrator:
     ) -> Optional[Tuple[str, str, List[int]]]:
         # ... (previous implementation) ...
         log_prefix = self._get_log_prefix(batch_job_id, item_identifier)
-        log_info(
+        logger.info(
             f"{log_prefix} UI Request: Get next speaker after index {current_speaker_index}."
         )
         item_state = self.labeling_state.get(batch_job_id, {}).get(item_identifier)
         if not item_state or not isinstance(item_state, dict):
-            log_error(f"{log_prefix} Item state invalid.")
+            logger.error(f"{log_prefix} Item state invalid.")
             return None
         labeling_config = {
             "speaker_labeling_preview_duration": self.config.get(
@@ -1000,27 +1002,27 @@ class Orchestrator:
     def skip_item_labeling(self, batch_job_id: str, item_identifier: str) -> bool:
         # ... (previous implementation) ...
         log_prefix = self._get_log_prefix(batch_job_id, item_identifier)
-        log_info(f"{log_prefix} UI Request: Skip remaining speakers.")
+        logger.info(f"{log_prefix} UI Request: Skip remaining speakers.")
         item_state = self.labeling_state.get(batch_job_id, {}).get(item_identifier)
         if not item_state or not isinstance(item_state, dict):
-            log_error(f"{log_prefix} Item state invalid.")
+            logger.error(f"{log_prefix} Item state invalid.")
             return False
         success = skip_labeling_for_item(item_state=item_state, log_prefix=log_prefix)
         if success:
-            log_info(f"{log_prefix} Triggering finalization after skip.")
+            logger.info(f"{log_prefix} Triggering finalization after skip.")
             finalized_ok = self.finalize_item(batch_job_id, item_identifier)
             return finalized_ok
         else:
-            log_error(f"{log_prefix} skip_labeling_for_item returned False.")
+            logger.error(f"{log_prefix} skip_labeling_for_item returned False.")
             return False
 
     def finalize_item(self, batch_job_id: str, item_identifier: str) -> bool:
         # ... (previous implementation) ...
         item_log_prefix = self._get_log_prefix(batch_job_id, item_identifier)
-        log_info(f"{item_log_prefix} Orchestrator finalizing item...")
+        logger.info(f"{item_log_prefix} Orchestrator finalizing item...")
         item_state = self.labeling_state.get(batch_job_id, {}).get(item_identifier)
         if not item_state or not isinstance(item_state, dict):
-            log_error(f"{item_log_prefix} Cannot finalize - item state invalid.")
+            logger.error(f"{item_log_prefix} Cannot finalize - item state invalid.")
             return False
         segments = item_state.get("segments")
         # Cast retrieved values to help Pylance
@@ -1029,7 +1031,7 @@ class Orchestrator:
         audio_path = item_state.get("audio_path")
         item_work_path = item_state.get("item_work_path")
         if not segments or not audio_path or not item_work_path:
-            log_error(f"{item_log_prefix} Cannot finalize - missing data in state.")
+            logger.error(f"{item_log_prefix} Cannot finalize - missing data in state.")
             self._remove_item_state(batch_job_id, item_identifier)
             return False
         # Cast non-None values after check
@@ -1057,7 +1059,7 @@ class Orchestrator:
             )
             finalization_success = generated_files is not None
         except Exception as e:
-            log_error(
+            logger.exception(
                 f"{item_log_prefix} Unexpected error during item finalization: {e}\n{traceback.format_exc()}"
             )
             finalization_success = False
@@ -1070,16 +1072,16 @@ class Orchestrator:
     def check_completion_and_zip(self, batch_job_id: str) -> Optional[Path]:
         # ... (previous implementation) ...
         log_prefix = self._get_log_prefix(batch_job_id)
-        log_info(f"{log_prefix} UI Request: Check batch completion and ZIP.")
+        logger.info(f"{log_prefix} UI Request: Check batch completion and ZIP.")
         batch_state = self.labeling_state.get(batch_job_id)
         items_remaining = False
         if batch_state:
             item_keys_present = [k for k in batch_state.keys() if k.startswith("item_")]
             items_remaining = bool(item_keys_present)
         if items_remaining:
-            log_info(f"{log_prefix} Batch labeling not complete.")
+            logger.info(f"{log_prefix} Batch labeling not complete.")
             return None
-        log_info(f"{log_prefix} All items finalized. Proceeding with ZIP creation.")
+        logger.info(f"{log_prefix} All items finalized. Proceeding with ZIP creation.")
         permanent_output_dir = Path(self.config.get("output_dir", "./output"))
         zip_suffix = self.config.get("final_zip_suffix", "_final_bundle.zip")
         master_zip_name = f"{batch_job_id}_batch_results{zip_suffix}"
@@ -1105,21 +1107,21 @@ class Orchestrator:
             )
             cleanup_temp = self.config.get("cleanup_temp_on_success", True)
             if zip_path and cleanup_temp and batch_work_path.exists():
-                log_info(
+                logger.info(
                     f"{log_prefix} Cleaning up batch temp dir after ZIP: {batch_work_path}"
                 )
                 cleanup_directory(batch_work_path, recreate=False)
             elif zip_path and not cleanup_temp:
-                log_info(
+                logger.info(
                     f"{log_prefix} Skipping cleanup of temp dir: {batch_work_path}"
                 )
             elif not zip_path and batch_work_path.exists():
-                log_warning(
+                logger.warning(
                     f"{log_prefix} Keeping temp dir due to ZIP failure: {batch_work_path}"
                 )
         except Exception as e:
-            log_error(
-                f"{log_prefix} Error during final zip/cleanup: {e}\n{traceback.format_exc()}"
+            logger.exception(
+                f"{log_prefix} Error during final zip/cleanup: {e}"
             )
             zip_path = None
         finally:
@@ -1132,7 +1134,7 @@ class Orchestrator:
         return zip_path
 
     def _remove_item_state(self, batch_job_id: str, item_identifier: str):
-        # ... (previous implementation) ...
+        # ...existing code...
         log_prefix = self._get_log_prefix(batch_job_id, item_identifier)
         if batch_job_id in self.labeling_state:
             batch_state = self.labeling_state[batch_job_id]
@@ -1143,7 +1145,7 @@ class Orchestrator:
                     and "item_work_path" in item_state_to_remove
                 ):
                     del batch_state[item_identifier]
-                    log_info(f"{log_prefix} Removed labeling state for item.")
+                    logger.info(f"{log_prefix} Removed labeling state for item.")
                     if "items_requiring_labeling_order" in batch_state and isinstance(
                         batch_state["items_requiring_labeling_order"], list
                     ):
@@ -1154,14 +1156,14 @@ class Orchestrator:
                         except ValueError:
                             pass
                 else:
-                    log_warning(
+                    logger.warning(
                         f"{log_prefix} Attempted to remove non-item state for '{item_identifier}'."
                     )
                 remaining_item_keys = [
                     k for k in batch_state.keys() if k.startswith("item_")
                 ]
                 if not remaining_item_keys:
-                    log_info(
+                    logger.info(
                         f"{self._get_log_prefix(batch_job_id)} No items left. Removing batch state."
                     )
                     del self.labeling_state[batch_job_id]

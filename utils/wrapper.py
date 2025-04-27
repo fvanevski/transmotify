@@ -8,21 +8,9 @@ import subprocess
 import traceback
 from pathlib import Path
 from typing import List, Optional, TextIO, Union, Dict, Any, Callable
+import logging
 
-# Assuming core.logging is established from Phase 1
-try:
-    from core.logging import log_info, log_warning, log_error
-except ImportError:
-    # Fallback basic print logging if core.logging is unavailable
-    def log_error(message: str):
-        print(f"ERROR (logging unavailable): {message}")
-
-    def log_warning(message: str):
-        print(f"WARNING (logging unavailable): {message}")
-
-    def log_info(message: str):
-        print(f"INFO (logging unavailable): {message}")
-
+logger = logging.getLogger(__name__)
 
 # Moved from core/utils.py
 def safe_run(
@@ -64,7 +52,7 @@ def safe_run(
     if env:
         subprocess_env.update(env)
 
-    log_info(
+    logger.info(
         f"{log_prefix} Executing command: {' '.join(safe_command)}"
     )  # Log command execution
 
@@ -112,8 +100,7 @@ def safe_run(
                         output_callback(stripped_line)
                     except Exception as cb_e:
                         cb_error_msg = f"{log_prefix} ERROR in output_callback: {cb_e} - Line: {stripped_line}"
-                        log_error(cb_error_msg)  # Log callback error using main logger
-                        # Try to write callback error to the file handle
+                        logger.error(cb_error_msg)
                         if log_file_handle and not log_file_handle.closed:
                             try:
                                 log_file_handle.write(f"{cb_error_msg}\n")
@@ -132,7 +119,6 @@ def safe_run(
             error_msg = (
                 f"Command failed with exit code {return_code}: {' '.join(safe_command)}"
             )
-            # Write error to process log file
             if log_file_handle and not log_file_handle.closed:
                 try:
                     log_file_handle.write(f"{log_prefix} ERROR: {error_msg}\n")
@@ -140,13 +126,11 @@ def safe_run(
                     print(
                         f"WARNING: Failed to write command error to log file handle: {log_e}"
                     )
-            # Log error using main logger
-            log_error(error_msg)
+            logger.error(error_msg)
             raise RuntimeError(error_msg)
         else:
-            log_info(f"{log_prefix} Command finished successfully.")
+            logger.info(f"{log_prefix} Command finished successfully.")
 
-        # Return captured output if requested
         return "".join(captured_output_lines) if capture_output else None
 
     except FileNotFoundError:
@@ -160,11 +144,10 @@ def safe_run(
                 print(
                     f"WARN: Failed to write FileNotFoundError to log file handle: {log_e}"
                 )
-        log_error(error_msg)
-        raise  # Re-raise the original FileNotFoundError
+        logger.error(error_msg)
+        raise
 
     except Exception as e:
-        # Catch other potential errors (e.g., permission issues)
         error_msg = (
             f"An error occurred while running command {' '.join(safe_command)}: {e}"
         )
@@ -177,26 +160,23 @@ def safe_run(
                 print(
                     f"WARN: Failed to write other exception to log file handle: {log_e}"
                 )
-        log_error(error_msg)
-        log_error(traceback.format_exc())  # Log full traceback
-
-        # Attempt to terminate the process if it's still running
+        logger.error(error_msg)
+        logger.exception(traceback.format_exc())
         if process and process.poll() is None:
-            log_warning(
+            logger.warning(
                 f"{log_prefix} Attempting to terminate process {process.pid}..."
             )
             try:
                 process.terminate()
-                process.wait(timeout=5)  # Wait briefly for graceful termination
-                log_warning(f"{log_prefix} Process terminated.")
+                process.wait(timeout=5)
+                logger.warning(f"{log_prefix} Process terminated.")
             except subprocess.TimeoutExpired:
-                log_warning(
+                logger.warning(
                     f"{log_prefix} Process did not terminate gracefully, killing."
                 )
-                process.kill()  # Force kill
+                process.kill()
             except Exception as term_err:
-                log_warning(
+                logger.warning(
                     f"{log_prefix} Error terminating process after failure: {term_err}"
                 )
-
         raise RuntimeError(error_msg) from e

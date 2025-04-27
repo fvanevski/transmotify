@@ -4,25 +4,17 @@ Handles downloading audio/video streams from YouTube using yt-dlp.
 """
 
 import re
+import logging
 from pathlib import Path
 from typing import List, Optional, TextIO, Union
 
-# Assuming utils.wrapper and core.logging are available from previous phases
+logger = logging.getLogger(__name__)
+
+# Assuming utils.wrapper is available from previous phases
 try:
     from utils.wrapper import safe_run
-    from core.logging import log_info, log_warning, log_error
 except ImportError:
-    # Fallback basic print logging if core.logging is unavailable
-    def log_error(message: str, **kwargs):
-        print(f"ERROR (logging unavailable): {message}")
-
-    def log_warning(message: str, **kwargs):
-        print(f"WARNING (logging unavailable): {message}")
-
-    def log_info(message: str, **kwargs):
-        print(f"INFO (logging unavailable): {message}")
-
-    # Dummy safe_run if wrapper is missing
+    # Fallback dummy safe_run if wrapper is missing
     def safe_run(*args, **kwargs):
         raise RuntimeError("utils.wrapper.safe_run not available")
 
@@ -48,13 +40,13 @@ def download_youtube_stream(
         The Path object to the downloaded file if successful, None otherwise.
     """
     output_path_obj = Path(output_path)
-    log_info(f"{log_prefix} Starting download for {youtube_url} to {output_path_obj}")
+    logger.info(f"{log_prefix} Starting download for {youtube_url} to {output_path_obj}")
 
     # Ensure output directory exists (using file_manager utility eventually)
     try:
         output_path_obj.parent.mkdir(parents=True, exist_ok=True)
     except Exception as e:
-        log_error(
+        logger.error(
             f"{log_prefix} Failed to create parent directory {output_path_obj.parent}: {e}"
         )
         return None
@@ -78,21 +70,21 @@ def download_youtube_stream(
             line,
         )
         if progress_match:
-            log_info(
+            logger.info(
                 f"{log_prefix} DL Progress: {progress_match.group(1)} at {progress_match.group(3)} ETA {progress_match.group(4)}"
             )
         elif "[download] Destination:" in line:
             # Logged outside if needed, this line is less informative with -o
             pass
         elif "[info]" in line and "Downloading" not in line:
-            log_info(f"{log_prefix} Info: {line.split(':', 1)[-1].strip()}")
+            logger.info(f"{log_prefix} Info: {line.split(':', 1)[-1].strip()}")
         elif "[ExtractAudio]" in line:
-            log_info(
+            logger.info(
                 f"{log_prefix} Extracting audio..."
             )  # yt-dlp might do internal conversion
         elif "ERROR:" in line:
             # Log error, but don't raise immediately, let safe_run handle exit code
-            log_error(f"{log_prefix} yt-dlp Error Logged: {line.strip()}")
+            logger.error(f"{log_prefix} yt-dlp Error Logged: {line.strip()}")
 
     try:
         safe_run(
@@ -103,23 +95,23 @@ def download_youtube_stream(
         )
 
         if not output_path_obj.exists() or output_path_obj.stat().st_size == 0:
-            log_error(
+            logger.error(
                 f"{log_prefix} Download finished, but output file is missing or empty: {output_path_obj}"
             )
             raise FileNotFoundError(
                 f"yt-dlp failed to create a valid output file at {output_path_obj}"
             )
 
-        log_info(f"{log_prefix} Download completed successfully: {output_path_obj}")
+        logger.info(f"{log_prefix} Download completed successfully: {output_path_obj}")
         return output_path_obj
 
     except (RuntimeError, FileNotFoundError) as e:
-        log_error(f"{log_prefix} Download failed for {youtube_url}: {e}")
+        logger.error(f"{log_prefix} Download failed for {youtube_url}: {e}")
         # Attempt cleanup of potentially incomplete file
         output_path_obj.unlink(missing_ok=True)
         return None
     except Exception as e:
-        log_error(
+        logger.error(
             f"{log_prefix} Unexpected error during download for {youtube_url}: {e}"
         )
         output_path_obj.unlink(missing_ok=True)

@@ -8,11 +8,14 @@ import re
 import subprocess  # For duration check fallback if safe_run fails initally
 from pathlib import Path
 from typing import List, Optional, TextIO, Union
+import logging
+
+# Initialize module-level logger
+logger = logging.getLogger(__name__)
 
 # Assuming utils.wrapper and core.logging are available from previous phases
 try:
     from utils.wrapper import safe_run
-    from core.logging import log_info, log_warning, log_error
 except ImportError:
     # Fallback basic print logging if core.logging is unavailable
     def log_error(message: str, **kwargs):
@@ -47,12 +50,12 @@ def check_audio_duration(
         False if audio is shorter than min_duration_sec.
     """
     if not audio_path.is_file():
-        log_warning(
+        logger.warning(
             f"{log_prefix} Audio file not found at {audio_path}, cannot check duration."
         )
         return False  # Cannot proceed if file doesn't exist
 
-    log_info(
+    logger.info(
         f"{log_prefix} Checking audio duration for {audio_path.name} (min: {min_duration_sec}s)..."
     )
     try:
@@ -78,25 +81,25 @@ def check_audio_duration(
 
         if duration_str is None:
             # safe_run already logs the error if the command fails
-            log_warning(
+            logger.warning(
                 f"{log_prefix} ffprobe command failed or returned no output for {audio_path.name}. Proceeding without duration check."
             )
             return True  # Proceed cautiously
 
         duration_str = duration_str.strip()
         if not duration_str or duration_str == "N/A":
-            log_warning(
+            logger.warning(
                 f"{log_prefix} ffprobe could not determine duration for {audio_path.name}. Proceeding, quality checks skipped."
             )
             return True  # Proceed if duration is unknown
 
         duration = float(duration_str)
-        log_info(
+        logger.info(
             f"{log_prefix} Detected audio duration: {duration:.2f} seconds for {audio_path.name}"
         )
 
         if duration < min_duration_sec:
-            log_warning(
+            logger.warning(
                 f"{log_prefix} Audio duration ({duration:.1f}s) is less than the minimum "
                 f"threshold ({min_duration_sec}s). Downstream processing (e.g., diarization) may be affected or skipped."
             )
@@ -105,18 +108,18 @@ def check_audio_duration(
             return True  # Indicate check passed (long enough)
 
     except FileNotFoundError:
-        log_warning(
+        logger.warning(
             f"{log_prefix} ffprobe command not found. Cannot perform audio duration check."
         )
         return True  # Proceed if ffprobe is not available
     except ValueError as e:
-        log_warning(
+        logger.warning(
             f"{log_prefix} Could not convert ffprobe duration output ('{duration_str}') to float for {audio_path.name}: {e}. Proceeding without check."
         )
         return True
     except Exception as e:
         # Catch any other unexpected errors during the check (e.g., RuntimeError from safe_run)
-        log_warning(
+        logger.warning(
             f"{log_prefix} Unexpected error running ffprobe duration check for {audio_path.name}: {e}. Proceeding without check."
         )
         # Consider logging traceback for unexpected errors if needed:
@@ -149,19 +152,19 @@ def convert_to_wav(
     """
     input_path_obj = Path(input_path)
     output_path_obj = Path(output_path)
-    log_info(
+    logger.info(
         f"{log_prefix} Converting {input_path_obj.name} to WAV at {output_path_obj} (Channels: {audio_channels}, Rate: {audio_samplerate} Hz)"
     )
 
     if not input_path_obj.is_file():
-        log_error(f"{log_prefix} Input file not found: {input_path_obj}")
+        logger.error(f"{log_prefix} Input file not found: {input_path_obj}")
         return None
 
     # Ensure output directory exists
     try:
         output_path_obj.parent.mkdir(parents=True, exist_ok=True)
     except Exception as e:
-        log_error(
+        logger.error(
             f"{log_prefix} Failed to create parent directory {output_path_obj.parent}: {e}"
         )
         return None
@@ -194,11 +197,11 @@ def convert_to_wav(
             time_str = progress_match.group(1)
             speed_str = progress_match.group(2)
             size_str = f" (size: {size_match.group(1)})" if size_match else ""
-            log_info(
+            logger.info(
                 f"{log_prefix} Progress: time={time_str}, speed={speed_str}x{size_str}"
             )
         elif "error" in line.lower() or "failed" in line.lower():
-            log_error(f"{log_prefix} ffmpeg Error Logged: {line.strip()}")
+            logger.error(f"{log_prefix} ffmpeg Error Logged: {line.strip()}")
         # elif "warning" in line.lower(): # Often too verbose
         #    log_warning(f"{log_prefix} ffmpeg Warning: {line.strip()}")
 
@@ -211,24 +214,24 @@ def convert_to_wav(
         )
 
         if not output_path_obj.exists() or output_path_obj.stat().st_size == 0:
-            log_error(
+            logger.error(
                 f"{log_prefix} Conversion finished, but output file is missing or empty: {output_path_obj}"
             )
             raise FileNotFoundError(
                 f"ffmpeg failed to create a valid output file at {output_path_obj}"
             )
 
-        log_info(
+        logger.info(
             f"{log_prefix} Conversion to WAV completed successfully: {output_path_obj}"
         )
         return output_path_obj
 
     except (RuntimeError, FileNotFoundError) as e:
-        log_error(f"{log_prefix} Conversion failed for {input_path_obj.name}: {e}")
+        logger.error(f"{log_prefix} Conversion failed for {input_path_obj.name}: {e}")
         output_path_obj.unlink(missing_ok=True)  # Cleanup failed output
         return None
     except Exception as e:
-        log_error(
+        logger.error(
             f"{log_prefix} Unexpected error during conversion for {input_path_obj.name}: {e}"
         )
         output_path_obj.unlink(missing_ok=True)

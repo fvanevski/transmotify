@@ -8,10 +8,13 @@ import json
 import re
 import string
 import traceback
+import logging
 from pathlib import Path
 from typing import Dict, List, Any, Optional, TextIO, Union
 from collections import defaultdict
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 # Use rapidfuzz for fuzzy matching
 try:
@@ -46,9 +49,9 @@ except ImportError:
 
 
 if not FUZZ_AVAILABLE:
-    log_warning("Rapidfuzz library not found. Snippet matching will be unavailable.")
+    logger.warning("Rapidfuzz library not found. Snippet matching will be unavailable.")
 if not PANDAS_AVAILABLE:
-    log_warning("Pandas library not found. Reading XLSX snippets will be unavailable.")
+    logger.warning("Pandas library not found. Reading XLSX snippets will be unavailable.")
 
 # Type hints
 Segment = Dict[str, Any]
@@ -62,7 +65,7 @@ def parse_xlsx_snippets(snippet_string: Any) -> Dict[str, str]:
     Handles None, NaN, and non-string types gracefully. Requires pandas.
     """
     if not PANDAS_AVAILABLE:
-        log_error("Pandas not available, cannot parse XLSX snippets.")
+        logger.error("Pandas not available, cannot parse XLSX snippets.")
         return {}
 
     mapping = {}
@@ -83,15 +86,15 @@ def parse_xlsx_snippets(snippet_string: Any) -> Dict[str, str]:
             snippet = match.group(2).strip()
             if name and snippet:
                 mapping[name] = snippet
-                log_info(
+                logger.info(
                     f"Parsed snippet - Name: '{name}', Snippet: '{snippet[:50]}...'"
                 )
             else:
-                log_warning(
+                logger.warning(
                     f"Could not parse snippet line effectively (empty name or snippet): '{line}'"
                 )
         else:
-            log_warning(f"Ignoring invalid snippet line format: '{line}'")
+            logger.warning(f"Ignoring invalid snippet line format: '{line}'")
     return mapping
 
 
@@ -100,17 +103,17 @@ def group_segments_by_speaker(segments: SegmentsList) -> List[Dict[str, Any]]:
     """Groups consecutive segments by the same speaker into dialogue blocks."""
     blocks = []
     if not segments:
-        log_info("No segments provided for grouping.")
+        logger.info("No segments provided for grouping.")
         return blocks
 
-    log_info(f"Grouping {len(segments)} segments by speaker...")
+    logger.info(f"Grouping {len(segments)} segments by speaker...")
 
     # Use an iterator to handle the first segment initialization cleanly
     segment_iter = iter(segments)
     try:
         first_seg = next(segment_iter)
     except StopIteration:
-        log_info("Segment list was empty after iterator check.")
+        logger.info("Segment list was empty after iterator check.")
         return blocks  # Empty list
 
     # Initialize current block with the first segment
@@ -157,7 +160,7 @@ def group_segments_by_speaker(segments: SegmentsList) -> List[Dict[str, Any]]:
                     }
                 )
             else:
-                log_warning(
+                logger.warning(
                     f"Skipping block for speaker '{current_speaker}' due to invalid start/end times."
                 )
 
@@ -184,11 +187,11 @@ def group_segments_by_speaker(segments: SegmentsList) -> List[Dict[str, Any]]:
             }
         )
     else:
-        log_warning(
+        logger.warning(
             f"Skipping final block for speaker '{current_speaker}' due to invalid start/end times."
         )
 
-    log_info(f"Grouped into {len(blocks)} speaker blocks.")
+    logger.info(f"Grouped into {len(blocks)} speaker blocks.")
     return blocks
 
 
@@ -212,20 +215,20 @@ def match_snippets_to_speakers(
         to the user-provided name (e.g., 'Alice') based on the best match above threshold.
     """
     if not FUZZ_AVAILABLE:
-        log_error("Rapidfuzz library not available. Cannot perform snippet matching.")
+        logger.error("Rapidfuzz library not available. Cannot perform snippet matching.")
         return {}
 
-    log_info(
+    logger.info(
         f"Attempting to match {len(speaker_snippet_map)} snippets to speakers (threshold: {match_threshold:.2f})..."
     )
     if not speaker_snippet_map or not segments:
-        log_info("No speaker snippets provided or no segments to match against.")
+        logger.info("No speaker snippets provided or no segments to match against.")
         return {}
 
     # Group segments into blocks for more context
     blocks = group_segments_by_speaker(segments)
     if not blocks:
-        log_warning(
+        logger.warning(
             "Segment grouping resulted in zero blocks. Cannot perform snippet matching."
         )
         return {}
@@ -249,20 +252,20 @@ def match_snippets_to_speakers(
     # Iterate through each user-provided snippet
     for user_name, snippet in speaker_snippet_map.items():
         if not snippet or len(snippet) < 5:  # Basic validation
-            log_warning(
+            logger.warning(
                 f"Ignoring short/empty snippet for '{user_name}'. Snippet: '{snippet}'"
             )
             continue
 
         normalized_snippet = normalize_text(snippet)
         if not normalized_snippet:
-            log_warning(f"Snippet for '{user_name}' became empty after normalization.")
+            logger.warning(f"Snippet for '{user_name}' became empty after normalization.")
             continue
 
         best_match_for_this_snippet = {"score": -1.0, "speaker_id": None}
         found_match_above_threshold = False
 
-        log_info(f"Matching snippet for '{user_name}': '{normalized_snippet[:100]}...'")
+        logger.info(f"Matching snippet for '{user_name}': '{normalized_snippet[:100]}...'")
 
         # Compare snippet against each speaker block
         for blk in blocks:
@@ -295,7 +298,7 @@ def match_snippets_to_speakers(
                 best_match_scores[original_speaker_id] = (
                     ratio  # Update best score for this ID
                 )
-                log_info(
+                logger.info(
                     f"  ✅ Match FOUND: Snippet '{user_name}' (score {ratio:.1f}) assigned to speaker '{original_speaker_id}' "
                     f"(overwriting score {best_match_scores.get(original_speaker_id, 0.0):.1f})"
                 )
@@ -306,11 +309,11 @@ def match_snippets_to_speakers(
         if not found_match_above_threshold:
             best_score = best_match_for_this_snippet["score"]
             best_spk = best_match_for_this_snippet["speaker_id"]
-            log_info(
+            logger.info(
                 f"  ❌ No match >= threshold ({fuzz_threshold:.1f}) found for snippet '{user_name}'. Best was {best_score:.1f} vs '{best_spk}'."
             )
 
-    log_info(
+    logger.info(
         f"Final snippet mapping (WhisperX ID -> User Name): {speaker_id_to_name_mapping}"
     )
     return speaker_id_to_name_mapping
@@ -354,35 +357,35 @@ def convert_json_to_structured(json_path: Path) -> SegmentsList:
         json.JSONDecodeError: If the file is not valid JSON.
         TypeError: If the 'segments' key in the JSON is not a list.
     """
-    log_info(f"Reading and structuring WhisperX JSON output from: {json_path}")
+    logger.info(f"Reading and structuring WhisperX JSON output from: {json_path}")
     if not json_path.is_file():
-        log_error(f"WhisperX output JSON file not found at {json_path}")
+        logger.error(f"WhisperX output JSON file not found at {json_path}")
         raise FileNotFoundError(f"WhisperX output JSON file not found at {json_path}")
 
     try:
         with open(json_path, "r", encoding="utf-8") as f:
             data: Dict = json.load(f)
     except json.JSONDecodeError as e:
-        log_error(f"Failed to decode JSON from {json_path}: {e}")
+        logger.error(f"Failed to decode JSON from {json_path}: {e}")
         raise  # Re-raise the error
     except Exception as e:
-        log_error(f"Error reading JSON file {json_path}: {e}")
+        logger.error(f"Error reading JSON file {json_path}: {e}")
         raise RuntimeError(f"Could not read JSON file {json_path}") from e
 
     structured: SegmentsList = []
     segments_raw: Any = data.get("segments", [])  # Default to empty list
 
     if not isinstance(segments_raw, list):
-        log_error(
+        logger.error(
             f"'segments' key in {json_path} is not a list (type: {type(segments_raw)}). Cannot process."
         )
         raise TypeError(f"'segments' key in {json_path} is not a list.")
 
-    log_info(f"Structuring {len(segments_raw)} segments from WhisperX output...")
+    logger.info(f"Structuring {len(segments_raw)} segments from WhisperX output...")
 
     for i, segment in enumerate(segments_raw):
         if not isinstance(segment, dict):
-            log_warning(f"Item #{i} in 'segments' is not a dictionary. Skipping.")
+            logger.warning(f"Item #{i} in 'segments' is not a dictionary. Skipping.")
             continue
 
         # Extract data with defaults
@@ -401,7 +404,7 @@ def convert_json_to_structured(json_path: Path) -> SegmentsList:
             or not isinstance(end_time, (int, float))
             or start_time > end_time
         ):
-            log_warning(
+            logger.warning(
                 f"Segment {i} has invalid/missing time: start={start_time}, end={end_time}. Using raw values."
             )
             # Decide how to handle: skip segment, use None, use 0? Using raw values for now.
@@ -415,7 +418,7 @@ def convert_json_to_structured(json_path: Path) -> SegmentsList:
         }
         structured.append(segment_output)
 
-    log_info(f"Finished structuring segments. Returning {len(structured)} segments.")
+    logger.info(f"Finished structuring segments. Returning {len(structured)} segments.")
     return structured
 
 
@@ -435,11 +438,11 @@ def save_script_transcript(
     Returns:
         The output Path object if successful, None otherwise.
     """
-    log_info(f"{log_prefix} Attempting to save script transcript to: {output_path}")
+    logger.info(f"{log_prefix} Attempting to save script transcript to: {output_path}")
     try:
         # Ensure parent directory exists
         if not create_directory(output_path.parent):
-            log_error(
+            logger.error(
                 f"{log_prefix} Failed to create parent directory for {output_path}. Aborting save."
             )
             return None
@@ -483,15 +486,15 @@ def save_script_transcript(
                         f"{time_str} {speaker}:\n{text}\n\n"
                     )  # Add newline after speaker for readability
 
-        log_info(f"{log_prefix} Script transcript saved successfully to {output_path}")
+        logger.info(f"{log_prefix} Script transcript saved successfully to {output_path}")
         return output_path
 
     except Exception as e:
         error_msg = (
             f"{log_prefix} Failed to save script transcript to {output_path}: {e}"
         )
-        log_error(error_msg)
-        log_error(traceback.format_exc())
+        logger.error(error_msg)
+        logger.error(traceback.format_exc())
         return None
 
 
@@ -508,7 +511,7 @@ def run_ffprobe_duration_check(audio_path: Path, min_duration: float = 5.0) -> b
         True if duration check passes (or ffprobe fails safely),
         False if audio is shorter than min_duration.
     """
-    log_info(f"Checking audio duration for {audio_path.name} (min: {min_duration}s)...")
+    logger.info(f"Checking audio duration for {audio_path.name} (min: {min_duration}s)...")
     try:
         command = [
             "ffprobe",
@@ -520,7 +523,7 @@ def run_ffprobe_duration_check(audio_path: Path, min_duration: float = 5.0) -> b
             "default=noprint_wrappers=1:nokey=1",  # Output only the value
             str(audio_path),
         ]
-        log_info(f"Running ffprobe check: {' '.join(command)}")  # Restored log
+        logger.info(f"Running ffprobe check: {' '.join(command)}")  # Restored log
         result = subprocess.run(
             command,
             capture_output=True,
@@ -531,18 +534,18 @@ def run_ffprobe_duration_check(audio_path: Path, min_duration: float = 5.0) -> b
         duration_str = result.stdout.strip()
 
         if not duration_str or duration_str == "N/A":
-            log_warning(
+            logger.warning(
                 f"ffprobe could not determine duration for {audio_path.name}. Proceeding, but diarization might be skipped or fail."
             )
             return True  # Proceed cautiously if duration is unknown
 
         duration = float(duration_str)
-        log_info(
+        logger.info(
             f"Detected audio duration: {duration:.2f} seconds for {audio_path.name}"
         )  # Restored log
 
         if duration < min_duration:
-            log_warning(
+            logger.warning(
                 f"Audio duration ({duration:.1f}s) is less than the minimum "
                 f"threshold ({min_duration}s) required for robust diarization. Quality may be affected."
             )
@@ -551,29 +554,29 @@ def run_ffprobe_duration_check(audio_path: Path, min_duration: float = 5.0) -> b
             return True  # Indicate check passed (long enough)
 
     except FileNotFoundError:
-        log_warning(
+        logger.warning(
             "ffprobe command not found. Cannot perform audio duration check. Diarization quality check skipped."
         )
         return True  # Proceed if ffprobe is not available, assume long enough
     except subprocess.TimeoutExpired:
-        log_warning(
+        logger.warning(
             f"ffprobe timed out while checking duration for {audio_path.name}. Proceeding without check."
         )
         return True
     except subprocess.CalledProcessError as e:
-        log_warning(
+        logger.warning(
             f"ffprobe returned an error (exit code {e.returncode}) while checking duration for {audio_path.name}. Output: {e.stderr or e.stdout}. Proceeding without check."
         )
         return True
     except ValueError as e:
-        log_warning(
+        logger.warning(
             f"Could not convert ffprobe duration output ('{duration_str}') to float for {audio_path.name}: {e}. Proceeding without check."
         )
         return True
     except Exception as e:
         # Catch any other unexpected errors during the check
-        log_warning(
+        logger.warning(
             f"Unexpected error running ffprobe duration check for {audio_path.name}: {e}. Proceeding without check."
         )
-        log_warning(traceback.format_exc())  # Log traceback for unexpected errors
+        logger.warning(traceback.format_exc())  # Log traceback for unexpected errors
         return True  # Proceed cautiously on other errors

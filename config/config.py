@@ -3,28 +3,11 @@
 # Source: Based on legacy codebase.txt and core/constants.py
 import json
 import os
+import logging
 from pathlib import Path
 from typing import Dict, Any, Optional
 
-# Use relative import for logging within the same top-level package
-try:
-    # Assumes core.logging is now established from Phase 1
-    from core.logging import log_error, log_warning, log_info
-
-    LOGGING_AVAILABLE = True
-except ImportError:
-    LOGGING_AVAILABLE = False
-
-    # Fallback basic print logging if core.logging is unavailable
-    def log_error(message: str):
-        print(f"ERROR (logging unavailable): {message}")
-
-    def log_warning(message: str):
-        print(f"WARNING (logging unavailable): {message}")
-
-    def log_info(message: str):
-        print(f"INFO (logging unavailable): {message}")
-
+logger = logging.getLogger(__name__)
 
 class Config:
     """
@@ -40,16 +23,16 @@ class Config:
         Args:
             config_file: The path to the JSON configuration file. Defaults to "config.json".
         """
-        log_info("Initializing configuration...")
+        logger.info("Initializing configuration...")
         self.config_file = Path(config_file)
         self.config: Dict[str, Any] = {}
         self._load_config()
         self._validate_config()
-        log_info("Configuration loaded and validated.")
+        logger.info("Configuration loaded and validated.")
 
     def _load_defaults(self) -> Dict[str, Any]:
         """Returns a dictionary of default configuration values, including constants."""
-        log_info("Loading configuration defaults...")
+        logger.info("Loading configuration defaults...")
         return {
             # --- Directory/File Settings ---
             "output_dir": "output",
@@ -122,29 +105,29 @@ class Config:
             try:
                 with open(self.config_file, "r", encoding="utf-8") as f:
                     loaded_config = json.load(f)
-                log_info(f"Loaded configuration overrides from {self.config_file}")
+                logger.info(f"Loaded configuration overrides from {self.config_file}")
             except json.JSONDecodeError:
-                log_warning(
+                logger.warning(
                     f"Error decoding JSON from {self.config_file}. Using defaults/env vars only."
                 )  # Changed log level
             except Exception as e:
-                log_warning(
+                logger.warning(
                     f"Error loading {self.config_file}: {e}. Using defaults/env vars only."
                 )  # Changed log level
         else:
-            log_info(
+            logger.info(
                 f"Configuration file {self.config_file} not found. Using default configuration and environment variables."
             )
 
         # Merge defaults and loaded config
         self.config = {**defaults, **loaded_config}
-        log_info("Merged defaults and file configuration.")
+        logger.info("Merged defaults and file configuration.")
 
         # Override specific critical settings with environment variables
         env_hf_token = os.getenv("HF_TOKEN")
         if env_hf_token:
             self.config["hf_token"] = env_hf_token
-            log_info("Overriding 'hf_token' with environment variable HF_TOKEN.")
+            logger.info("Overriding 'hf_token' with environment variable HF_TOKEN.")
         elif not self.config.get("hf_token"):
             # Warning issued during validation if needed
             pass
@@ -152,17 +135,17 @@ class Config:
         env_device = os.getenv("DEVICE")
         if env_device and env_device in ["cuda", "cpu"]:
             self.config["device"] = env_device
-            log_info(
+            logger.info(
                 f"Overriding 'device' with environment variable DEVICE: {env_device}"
             )
         elif env_device:
-            log_warning(
+            logger.warning(
                 f"Environment variable DEVICE ('{env_device}') is invalid. Use 'cuda' or 'cpu'. Using config value ('{self.config.get('device')}')."
             )
 
     def _validate_config(self):
         """Performs basic validation on critical configuration settings."""
-        log_info("Validating configuration...")
+        logger.info("Validating configuration...")
         hf_token = self.config.get("hf_token")
         # Allow hf_token to be None, but warn if diarization models are selected later?
         # For now, only warn if it's missing *and* diarization model looks like default pyannote
@@ -170,29 +153,29 @@ class Config:
             "pyannote_diarization_model", ""
         )
         if not hf_token and is_pyannote_default:
-            log_warning(
+            logger.warning(
                 "Hugging Face token ('hf_token') is missing (checked config and HF_TOKEN env var). "
                 "The default Pyannote diarization model requires a token. Diarization may fail."
             )
         elif hf_token:
-            log_info("Hugging Face token is configured.")
+            logger.info("Hugging Face token is configured.")
 
         device = self.config.get("device")
         if device not in ["cuda", "cpu"]:
             original_device = device
             self.config["device"] = "cpu"  # Fallback to CPU
-            log_warning(
+            logger.warning(
                 f"Invalid device '{original_device}' specified. Falling back to 'cpu'."
             )
         else:
-            log_info(f"Device configured to '{device}'.")
+            logger.info(f"Device configured to '{device}'.")
 
         # Validate fusion weights
         w_text = self.config.get("text_fusion_weight", 0.0)
         w_audio = self.config.get("audio_fusion_weight", 0.0)
         # Use tolerance for floating point comparison
         if not (0.99 <= (w_text + w_audio) <= 1.01):
-            log_warning(
+            logger.warning(
                 f"Fusion weights (text: {w_text}, audio: {w_audio}) do not sum close to 1. Normalization might occur later."
             )
 
@@ -204,11 +187,11 @@ class Config:
                 self.config.get("speaker_labeling_preview_duration", 0.0)
             )
             if preview_duration <= 0:
-                log_warning(
+                logger.warning(
                     "'speaker_labeling_preview_duration' must be positive. Check config."
                 )
         except (ValueError, TypeError):
-            log_warning(
+            logger.warning(
                 "Speaker labeling time parameters (min_total_time, min_block_time, preview_duration) must be numbers. Check config."
             )
 
@@ -216,18 +199,18 @@ class Config:
         try:
             thresh = float(self.config.get("default_snippet_match_threshold", 0.8))
             if not (0.0 <= thresh <= 1.0):
-                log_warning(
+                logger.warning(
                     "'default_snippet_match_threshold' must be between 0.0 and 1.0. Check config."
                 )
                 # Optionally clamp the value here if desired
         except (ValueError, TypeError):
-            log_warning(
+            logger.warning(
                 "'default_snippet_match_threshold' must be a number. Check config."
             )
 
     def save_config(self):
         """Saves the current non-default configuration back to the config file."""
-        log_info(f"Attempting to save configuration to {self.config_file}...")
+        logger.info(f"Attempting to save configuration to {self.config_file}...")
         try:
             config_dir = self.config_file.parent
             config_dir.mkdir(parents=True, exist_ok=True)
@@ -252,9 +235,9 @@ class Config:
                 json.dump(
                     config_to_save, f, indent=2, ensure_ascii=False, sort_keys=True
                 )
-            log_info(f"Configuration saved successfully to {self.config_file}")
+            logger.info(f"Configuration saved successfully to {self.config_file}")
         except Exception as e:
-            log_error(f"Failed to save configuration to {self.config_file}: {e}")
+            logger.error(f"Failed to save configuration to {self.config_file}: {e}")
 
     def get(self, key: str, default: Any = None) -> Any:
         """Gets a configuration value by key, returning default if not found."""
@@ -262,7 +245,7 @@ class Config:
 
     def set(self, key: str, value: Any):
         """Sets a configuration value and saves the config file."""
-        log_info(f"Setting configuration key '{key}' and saving.")
+        logger.info(f"Setting configuration key '{key}' and saving.")
         self.config[key] = value
         self.save_config()
 

@@ -6,6 +6,7 @@ Handles fetching metadata (title, description, etc.) for YouTube videos using yt
 import json
 import traceback
 from typing import Dict, Any, Optional, List
+import logging
 
 # Assuming utils.wrapper and core.logging are available from previous phases
 try:
@@ -26,6 +27,8 @@ except ImportError:
     def safe_run(*args, **kwargs):
         raise RuntimeError("utils.wrapper.safe_run not available")
 
+logger = logging.getLogger(__name__)
+
 
 def fetch_youtube_metadata(
     youtube_url: str, log_prefix: str = "[YT Meta]"
@@ -41,7 +44,7 @@ def fetch_youtube_metadata(
         A dictionary containing video metadata if successful, None otherwise.
         Includes standard yt-dlp fields like 'title', 'description', 'uploader', etc.
     """
-    log_info(f"{log_prefix} Fetching metadata for {youtube_url}...")
+    logger.info(f"{log_prefix} Fetching metadata for {youtube_url}...")
     command: List[str] = [
         "yt-dlp",
         "-j",  # Output JSON
@@ -62,16 +65,16 @@ def fetch_youtube_metadata(
         )
 
         if not metadata_output:
-            log_warning(
+            logger.warning(
                 f"{log_prefix} No metadata output captured from yt-dlp for {youtube_url}."
             )
             return None  # Indicate failure if no output
 
         try:
             # Log that we received *some* output before parsing
-            # log_info(f"{log_prefix} Received metadata output (length: {len(metadata_output)}). Parsing...") # Too verbose
+            # logger.info(f"{log_prefix} Received metadata output (length: {len(metadata_output)}). Parsing...") # Too verbose
             metadata = json.loads(metadata_output)
-            log_info(
+            logger.info(
                 f"{log_prefix} Metadata fetched and parsed successfully for {youtube_url}."
             )
             # Add the original URL for reference
@@ -79,31 +82,31 @@ def fetch_youtube_metadata(
             return metadata
 
         except json.JSONDecodeError as e:
-            log_error(
+            logger.error(
                 f"{log_prefix} Failed to decode yt-dlp metadata JSON for {youtube_url}: {e}"
             )
             # Log the beginning of the problematic output for debugging
-            log_error(
+            logger.error(
                 f"{log_prefix} Start of problematic metadata output: {metadata_output[:500]}..."
             )
             return None  # Indicate failure
         except Exception as e:
             # Catch other potential errors during parsing
-            log_error(
+            logger.error(
                 f"{log_prefix} Unexpected error processing metadata for {youtube_url}: {e}"
             )
-            log_error(traceback.format_exc())
+            logger.error(traceback.format_exc())
             return None
 
     except RuntimeError as e:
         # safe_run already logged the command failure
-        log_error(
+        logger.error(
             f"{log_prefix} Metadata fetch command failed for {youtube_url}. See previous logs."
         )
         return None
     except Exception as e:
         # Catch unexpected errors during safe_run execution itself
-        log_error(
+        logger.error(
             f"{log_prefix} Unexpected error during metadata fetch execution for {youtube_url}: {e}"
         )
         return None
