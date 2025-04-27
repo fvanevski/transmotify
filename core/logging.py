@@ -1,28 +1,26 @@
 # core/logging.py
 # Source: Based on legacy codebase.txt
 """
-Configures and provides basic logging functionality for the application.
+Configures and provides logging functionality for the application.
 """
 
 import logging
-import os
-from pathlib import Path  # Import pathlib
-from typing import Dict, Any  # Import typing helpers
+import logging.config
+from pathlib import Path
+from typing import Dict, Any
 
 
 def setup_logging(config: Dict[str, Any]) -> None:
     """
-    Sets up basic file logging based on the provided configuration dictionary.
+    Sets up logging based on the provided configuration dictionary using dictConfig.
 
     Args:
         config (Dict[str, Any]): The configuration dictionary, expected to
                                  contain 'log_level' and 'output_dir'.
     """
-    log_level_str: str = config.get(
-        "log_level", "INFO"
-    ).upper()  # Get level, default INFO, ensure uppercase
-    log_dir_str: str = config.get("output_dir", "output")  # Get dir, default "output"
-    log_filename: str = "app.log"  # Keep filename simple, could be made configurable
+    log_level_str: str = config.get("log_level", "INFO").upper()
+    log_dir_str: str = config.get("output_dir", "output")
+    log_filename: str = "app.log"
 
     log_dir_path = Path(log_dir_str)
     log_file_path = log_dir_path / log_filename
@@ -33,49 +31,67 @@ def setup_logging(config: Dict[str, Any]) -> None:
     except OSError as e:
         # Cannot log this error to file yet, print to console
         print(f"ERROR: Failed to create log directory {log_dir_path}: {e}")
-        # Optionally raise error or exit? For now, continue, logging might fail.
 
-    # Define logging format
-    log_format: str = "%(asctime)s - %(levelname)s - %(name)s - %(message)s"
-    date_format: str = "%Y-%m-%d %H:%M:%S"
+    # Define logging configuration dictionary
+    logging_config = {
+        'version': 1,
+        'disable_existing_loggers': False,
+        'formatters': {
+            'standard': {
+                'format': '%(asctime)s - %(levelname)s - %(name)s - %(message)s',
+                'datefmt': '%Y-%m-%d %H:%M:%S',
+            },
+        },
+        'handlers': {
+            'file': {
+                'level': log_level_str,
+                'class': 'logging.FileHandler',
+                'filename': str(log_file_path),
+                'formatter': 'standard',
+            },
+            'console': {
+                'level': log_level_str,
+                'class': 'logging.StreamHandler',
+                'formatter': 'standard',
+            },
+        },
+        'loggers': {
+            '': {  # root logger
+                'handlers': ['file', 'console'],
+                'level': log_level_str,
+                'propagate': True,
+            },
+            'transformers': {
+                'level': 'WARNING',  # Prevent libraries from flooding logs
+            },
+        },
+    }
 
-    # Get numeric log level
-    log_level: int = getattr(logging, log_level_str, logging.INFO)
-
-    # Configure root logger
     try:
-        logging.basicConfig(
-            filename=str(log_file_path),  # basicConfig expects string path
-            level=log_level,
-            format=log_format,
-            datefmt=date_format,
-            # Using force=True to allow reconfiguration if basicConfig was called elsewhere
-            force=True,
-        )
-        # Optional: Prevent libraries (like transformers) from flooding logs below a certain level
-        # logging.getLogger("transformers").setLevel(logging.WARNING)
-        logging.info("Logging setup complete.")  # Log initial message
+        # Apply the configuration
+        logging.config.dictConfig(logging_config)
+        logging.getLogger(__name__).info("Logging setup complete.")
     except Exception as e:
-        # If basicConfig fails, print error to console
-        print(f"ERROR: Failed to configure logging to file {log_file_path}: {e}")
+        # If dictConfig fails, print error to console
+        print(f"ERROR: Failed to configure logging: {e}")
 
+
+# These wrapper functions are maintained for compatibility with existing code
+# but should be gradually replaced with direct logger usage
 
 def log_info(message: str) -> None:
     """Logs an informational message."""
-    # Get logger for the module calling this function (helps identify source)
-    # Note: Using __name__ might show 'core.logging' if called directly,
-    # consider using inspect.stack()[1].filename for caller module if needed.
-    logger = logging.getLogger(__name__)
-    logger.info(message)
+    caller_logger = logging.getLogger("core.logging")
+    caller_logger.info(message)
 
 
 def log_error(message: str) -> None:
     """Logs an error message."""
-    logger = logging.getLogger(__name__)
-    logger.error(message)
+    caller_logger = logging.getLogger("core.logging")
+    caller_logger.error(message)
 
 
 def log_warning(message: str) -> None:
     """Logs a warning message."""
-    logger = logging.getLogger(__name__)
-    logger.warning(message)
+    caller_logger = logging.getLogger("core.logging")
+    caller_logger.warning(message)

@@ -10,14 +10,22 @@ import os
 import traceback
 import re
 import math
+import sys
 from pathlib import Path
 from typing import Dict, Any, Optional, Tuple, List, Generator, Union, TYPE_CHECKING
+
+# Import logging module for module-level logger
+import logging
+logger = logging.getLogger(__name__)
 
 # Imports for type checking only (avoids circular imports)
 if TYPE_CHECKING:
     import gradio as gr
     from gradio import themes
     from core.orchestrator import Orchestrator
+
+# Import custom exceptions
+from core.errors import TransmotifyError, ResourceAccessError, ProcessingError
 
 # Gradio and Pandas are core dependencies for the UI
 # Declare GRADIO_AVAILABLE and component placeholders outside the try block
@@ -30,37 +38,18 @@ try:
     import pandas as pd  # type: ignore
 
     GRADIO_AVAILABLE = True
-except ImportError:
-    print("ERROR: Gradio or Pandas library not found. UI cannot be launched.")
+except ImportError as e:
+    logger.error("Gradio or Pandas library not found. UI cannot be launched.", exc_info=True)
     # UI cannot function without Gradio, so exiting or raising might be appropriate
     # depending on how main.py handles this. For now, the flag is set.
 
-# Import the backend orchestrator and logging
+# Import the backend orchestrator
 try:
     # Make Orchestrator import essential. If it fails, the app likely can't run.
     from core.orchestrator import Orchestrator
-    from core.logging import log_error, log_warning, log_info
 except ImportError as e:
-    # Define fallback loggers ONLY if logging import failed
-    # If Orchestrator failed, it's a more critical error usually handled in main.py
-    print(
-        f"ERROR: Failed to import core modules (Orchestrator, logging): {e}. Ensure PYTHONPATH is correct."
-    )
-
-    def log_error(message: str):
-        print(f"ERROR (logging unavailable): {message}")  # type: ignore
-
-    def log_warning(message: str):
-        print(f"WARNING (logging unavailable): {message}")  # type: ignore
-
-    def log_info(message: str):
-        print(f"INFO (logging unavailable): {message}")  # type: ignore
-
-    # Raising here might be better if Orchestrator is critical, or let main.py handle it.
-    # raise RuntimeError("Critical component Orchestrator failed to import.") from e
-    Orchestrator = (
-        Any  # Use Any as a placeholder if needed for type checking downstream
-    )
+    logger.exception("Failed to import core modules (Orchestrator). Ensure PYTHONPATH is correct.")
+    raise ResourceAccessError("Critical component Orchestrator failed to import.") from e
 
 
 # --- Helper to generate YouTube embed HTML ---
@@ -72,7 +61,7 @@ def get_youtube_embed_html(youtube_url: str, start_time_seconds: int = 0) -> str
         or not isinstance(youtube_url, str)
         or not youtube_url.startswith("http")
     ):
-        log_warning(f"Invalid YouTube URL for embed: {youtube_url}")
+        logger.warning(f"Invalid YouTube URL for embed: {youtube_url}")
         return "<p>Invalid YouTube URL</p>"
 
     video_id = None
@@ -93,7 +82,7 @@ def get_youtube_embed_html(youtube_url: str, start_time_seconds: int = 0) -> str
             break
 
     if not video_id:
-        log_warning(f"Could not extract Video ID from URL: {youtube_url}")
+        logger.warning(f"Could not extract Video ID from URL: {youtube_url}")
         return f"<p>Could not extract Video ID from URL: {youtube_url}</p>"  # Show URL in error
 
     start_param = max(
@@ -114,7 +103,6 @@ def get_youtube_embed_html(youtube_url: str, start_time_seconds: int = 0) -> str
 
 
 # --- Main UI Class ---
-# ***** CORRECTED: Class definition moved to top level *****
 class UI:
     """Manages the Gradio interface and its interactions with the Orchestrator."""
 
@@ -128,7 +116,7 @@ class UI:
         """
         if not GRADIO_AVAILABLE:
             # This check prevents initialization if Gradio isn't installed.
-            raise ImportError("Gradio or Pandas not found. UI cannot be initialized.")
+            raise ResourceAccessError("Gradio or Pandas not found. UI cannot be initialized.")
 
         # Type check orchestrator if possible (will be Any if import failed, but useful if it succeeded)
         if not isinstance(orchestrator, Orchestrator) and Orchestrator is not Any:
@@ -139,13 +127,13 @@ class UI:
         self.config_data = (
             orchestrator.config.config
         )  # Get the raw config dict if needed
-        log_info("UI Initialized with Orchestrator instance.")
+        logger.info("UI Initialized with Orchestrator instance.")
 
     def create_ui(self) -> "gr.Blocks":
         """Creates the Gradio Blocks interface."""
         # Ensure Gradio components are available before using them
         if not GRADIO_AVAILABLE or not gr or not themes:
-            raise RuntimeError("Gradio components unavailable for UI creation.")
+            raise ResourceAccessError("Gradio components unavailable for UI creation.")
 
         default_theme = themes.Default()
 
@@ -267,7 +255,7 @@ class UI:
 
             def change_ui_mode(mode: str) -> Dict["gr.UIComponent", Dict[Any, Any]]:
                 """Updates visibility of UI groups based on the current mode."""
-                log_info(f"Changing UI mode to: {mode}")
+                logger.info(f"Changing UI mode to: {mode}")
                 is_labeling = mode == "labeling"
                 is_idle_or_finished = mode in ["idle", "finished", "error"]
                 return {
@@ -331,7 +319,7 @@ class UI:
                     if returned_batch_id:
                         # Batch requires labeling
                         current_batch_job_id = returned_batch_id
-                        log_info(
+                        logger.info(
                             f"Batch [{current_batch_job_id}] requires labeling. Initializing UI."
                         )
                         # Get the ordered list of items directly from orchestrator state
@@ -343,7 +331,7 @@ class UI:
                         )
 
                         if not items_requiring_labeling:
-                            log_error(
+                            logger.error(
                                 f"Batch [{current_batch_job_id}] needs labeling, but no items found in state."
                             )
                             yield {
@@ -356,7 +344,7 @@ class UI:
                             return
 
                         first_item_id = items_requiring_labeling[0]
-                        log_info(f"Starting labeling UI with item: {first_item_id}")
+                        logger.info(f"Starting labeling UI with item: {first_item_id}")
 
                         # --- CALL ORCHESTRATOR to get first speaker data ---
                         first_speaker_data = self.orchestrator.start_labeling_item(
@@ -401,7 +389,7 @@ class UI:
                                 **change_ui_mode("labeling"),
                             }
                         else:
-                            log_error(
+                            logger.error(
                                 f"Failed to get initial speaker data for item {first_item_id} from orchestrator."
                             )
                             yield {
@@ -413,7 +401,7 @@ class UI:
                             }
                     else:
                         # Batch finished without needing labeling
-                        log_info(
+                        logger.info(
                             "Batch processing finished. No interactive labeling required."
                         )
                         # Determine final status based on status message content
@@ -432,7 +420,7 @@ class UI:
                             if match:
                                 final_zip_path_str = match.group(1).strip()
                             else:
-                                log_warning(
+                                logger.warning(
                                     f"Could not extract ZIP path from success message: {status_msg}"
                                 )
 
@@ -442,11 +430,17 @@ class UI:
                             **change_ui_mode(final_mode),
                         }
 
-                except Exception as e:
-                    error_trace = traceback.format_exc()
-                    log_error(f"Error in process_batch_wrapper: {e}\n{error_trace}")
+                except TransmotifyError as e:
+                    logger.exception(f"TransmotifyError in process_batch_wrapper: {e}")
                     yield {
-                        batch_status_output: f"An unexpected error occurred during batch processing: {e}\n\n{error_trace}",
+                        batch_status_output: f"Pipeline error: {e}",
+                        ui_mode_state: "error",
+                        **change_ui_mode("error"),
+                    }
+                except Exception as e:
+                    logger.exception(f"Unexpected error in process_batch_wrapper: {e}")
+                    yield {
+                        batch_status_output: f"An unexpected error occurred during batch processing: {e}",
                         ui_mode_state: "error",
                         **change_ui_mode("error"),
                     }
@@ -490,7 +484,7 @@ class UI:
                 current_status_text: str,  # Pass the current status text
             ) -> Generator[Dict, Any, Any]:
                 """Handles UI transitions AFTER an item is finalized."""
-                log_info(
+                logger.info(
                     f"[{batch_id}] UI moving state after finalizing item index {item_idx}"
                 )
 
@@ -499,67 +493,77 @@ class UI:
                 if next_item_idx < len(items_to_label):
                     # --- Move UI to the NEXT item ---
                     next_item_id = items_to_label[next_item_idx]
-                    log_info(
+                    logger.info(
                         f"[{batch_id}] Moving UI to label next item: {next_item_id} (index {next_item_idx})"
                     )
 
-                    # --- CALL ORCHESTRATOR to get data for the next item ---
-                    next_speaker_data = self.orchestrator.start_labeling_item(
-                        batch_id, next_item_id
-                    )
-
-                    if next_speaker_data:
-                        next_speaker_id, next_yt_url, next_start_times = (
-                            next_speaker_data
-                        )
-                        # Retrieve state info for the new item from orchestrator state
-                        batch_state = self.orchestrator.labeling_state.get(batch_id, {})
-                        next_item_state = batch_state.get(next_item_id, {})
-                        next_eligible_spkrs = next_item_state.get(
-                            "eligible_speakers", []
+                    try:
+                        # --- CALL ORCHESTRATOR to get data for the next item ---
+                        next_speaker_data = self.orchestrator.start_labeling_item(
+                            batch_id, next_item_id
                         )
 
-                        initial_start_time = (
-                            next_start_times[0] if next_start_times else 0
-                        )
-                        clip_count = len(next_start_times)
-                        total_items_count = len(items_to_label)
-                        new_html = get_youtube_embed_html(
-                            next_yt_url, initial_start_time
-                        )
+                        if next_speaker_data:
+                            next_speaker_id, next_yt_url, next_start_times = (
+                                next_speaker_data
+                            )
+                            # Retrieve state info for the new item from orchestrator state
+                            batch_state = self.orchestrator.labeling_state.get(batch_id, {})
+                            next_item_state = batch_state.get(next_item_id, {})
+                            next_eligible_spkrs = next_item_state.get(
+                                "eligible_speakers", []
+                            )
 
-                        yield {
-                            current_item_index_state: next_item_idx,
-                            current_youtube_url_state: next_yt_url,
-                            eligible_speakers_state: next_eligible_spkrs,
-                            current_speaker_index_state: 0,  # Reset speaker index for new item
-                            current_start_times_state: next_start_times,
-                            current_clip_index_state: 0,  # Reset clip index
-                            labeling_progress_md: f"Labeling Speaker: **{next_speaker_id}** (Speaker 1/{len(next_eligible_spkrs)}, Item {next_item_idx + 1}/{total_items_count})",
-                            current_clip_display: f"Preview 1 of {clip_count}",
-                            video_player_html: new_html,
-                            speaker_label_input: gr.update(value=""),  # Clear input
-                            prev_clip_btn: gr.update(interactive=(clip_count > 1)),
-                            next_clip_btn: gr.update(interactive=(clip_count > 1)),
-                            ui_mode_state: "labeling",  # Ensure UI stays in labeling mode
-                            batch_status_output: current_status_text,  # Pass status through
-                            **change_ui_mode("labeling"),
-                        }
-                    else:
-                        # Error starting the next item
-                        log_error(
-                            f"Failed to get initial speaker data for next item {next_item_id}."
-                        )
+                            initial_start_time = (
+                                next_start_times[0] if next_start_times else 0
+                            )
+                            clip_count = len(next_start_times)
+                            total_items_count = len(items_to_label)
+                            new_html = get_youtube_embed_html(
+                                next_yt_url, initial_start_time
+                            )
+
+                            yield {
+                                current_item_index_state: next_item_idx,
+                                current_youtube_url_state: next_yt_url,
+                                eligible_speakers_state: next_eligible_spkrs,
+                                current_speaker_index_state: 0,  # Reset speaker index for new item
+                                current_start_times_state: next_start_times,
+                                current_clip_index_state: 0,  # Reset clip index
+                                labeling_progress_md: f"Labeling Speaker: **{next_speaker_id}** (Speaker 1/{len(next_eligible_spkrs)}, Item {next_item_idx + 1}/{total_items_count})",
+                                current_clip_display: f"Preview 1 of {clip_count}",
+                                video_player_html: new_html,
+                                speaker_label_input: gr.update(value=""),  # Clear input
+                                prev_clip_btn: gr.update(interactive=(clip_count > 1)),
+                                next_clip_btn: gr.update(interactive=(clip_count > 1)),
+                                ui_mode_state: "labeling",  # Ensure UI stays in labeling mode
+                                batch_status_output: current_status_text,  # Pass status through
+                                **change_ui_mode("labeling"),
+                            }
+                        else:
+                            # Error starting the next item
+                            logger.error(
+                                f"Failed to get initial speaker data for next item {next_item_id}."
+                            )
+                            yield {
+                                batch_status_output: gr.update(
+                                    value=f"{current_status_text}\n\nERROR: Failed start labeling next item {next_item_id}."
+                                ),
+                                ui_mode_state: "error",
+                                **change_ui_mode("error"),
+                            }
+                    except TransmotifyError as e:
+                        logger.exception(f"Error preparing next item: {e}")
                         yield {
                             batch_status_output: gr.update(
-                                value=f"{current_status_text}\n\nERROR: Failed start labeling next item {next_item_id}."
+                                value=f"{current_status_text}\n\nERROR: {e}"
                             ),
                             ui_mode_state: "error",
                             **change_ui_mode("error"),
                         }
                 else:
                     # --- Finished all items in the batch ---
-                    log_info(
+                    logger.info(
                         f"[{batch_id}] UI: Finished labeling/skipping all items. Checking completion..."
                     )
                     yield {
@@ -570,29 +574,39 @@ class UI:
                     # Update internal status text (not strictly necessary if only yielding once more)
                     current_status_text = f"{current_status_text}\n\nLabeling complete for all items. Finalizing batch and creating ZIP..."
 
-                    # --- CALL ORCHESTRATOR to check completion and create ZIP ---
-                    final_zip_path = self.orchestrator.check_completion_and_zip(
-                        batch_id
-                    )
+                    try:
+                        # --- CALL ORCHESTRATOR to check completion and create ZIP ---
+                        final_zip_path = self.orchestrator.check_completion_and_zip(
+                            batch_id
+                        )
 
-                    # --- CORRECTED: Redundant assignment removed ---
-                    final_status_msg = (
-                        f"✅ Batch complete. Output: {final_zip_path}"
-                        if final_zip_path
-                        else "❗️ Batch complete, but ZIP creation failed."
-                    )
-                    final_mode = "finished" if final_zip_path else "error"
+                        # --- CORRECTED: Redundant assignment removed ---
+                        final_status_msg = (
+                            f"✅ Batch complete. Output: {final_zip_path}"
+                            if final_zip_path
+                            else "❗️ Batch complete, but ZIP creation failed."
+                        )
+                        final_mode = "finished" if final_zip_path else "error"
 
-                    yield {
-                        batch_status_output: gr.update(
-                            value=f"{current_status_text}\n\n{final_status_msg}"
-                        ),  # Append final message
-                        batch_download_output: (
-                            str(final_zip_path) if final_zip_path else ""
-                        ),
-                        ui_mode_state: final_mode,
-                        **change_ui_mode(final_mode),
-                    }
+                        yield {
+                            batch_status_output: gr.update(
+                                value=f"{current_status_text}\n\n{final_status_msg}"
+                            ),  # Append final message
+                            batch_download_output: (
+                                str(final_zip_path) if final_zip_path else ""
+                            ),
+                            ui_mode_state: final_mode,
+                            **change_ui_mode(final_mode),
+                        }
+                    except TransmotifyError as e:
+                        logger.exception(f"Error finalizing batch: {e}")
+                        yield {
+                            batch_status_output: gr.update(
+                                value=f"{current_status_text}\n\nERROR finalizing batch: {e}"
+                            ),
+                            ui_mode_state: "error",
+                            **change_ui_mode("error"),
+                        }
 
             def handle_submit_label_wrapper(
                 batch_id: str,
@@ -612,7 +626,7 @@ class UI:
                     or not speakers_to_label
                     or speaker_idx >= len(speakers_to_label)
                 ):
-                    log_error(
+                    logger.error(
                         f"Submit label called with invalid state: {batch_id=}, {item_idx=}, {len(items_to_label)=}, {speaker_idx=}, {len(speakers_to_label)=}"
                     )
                     yield {
@@ -624,83 +638,91 @@ class UI:
 
                 item_id = items_to_label[item_idx]
                 speaker_id = speakers_to_label[speaker_idx]
-                log_info(
+                logger.info(
                     f"[{batch_id}-{item_id}] UI submitting label for {speaker_id}: '{current_label_input}'"
                 )
 
-                # --- CALL ORCHESTRATOR to store label ---
-                success = self.orchestrator.store_label(
-                    batch_id, item_id, speaker_id, current_label_input
-                )
-                if not success:
-                    log_warning(
-                        f"Failed to store label for {speaker_id} in orchestrator state."
+                try:
+                    # --- CALL ORCHESTRATOR to store label ---
+                    success = self.orchestrator.store_label(
+                        batch_id, item_id, speaker_id, current_label_input
                     )
-                    # Update status but continue
-                    current_status_text = f"{current_status_text}\n\nWARN: Failed to store label for {speaker_id}."
-                    yield {batch_status_output: gr.update(value=current_status_text)}
-                    # Proceed to next speaker anyway? Or halt? Current logic proceeds.
-
-                # --- CALL ORCHESTRATOR to get next speaker in *same* item ---
-                next_speaker_data = self.orchestrator.get_next_labeling_speaker(
-                    batch_id, item_id, speaker_idx
-                )
-
-                if next_speaker_data:
-                    # --- Still more speakers in the CURRENT item ---
-                    next_speaker_id, yt_url, next_start_times = next_speaker_data
-                    next_speaker_idx = speaker_idx + 1
-                    initial_start_time = next_start_times[0] if next_start_times else 0
-                    clip_count = len(next_start_times)
-                    total_speakers = len(speakers_to_label)
-                    total_items_count = len(items_to_label)
-                    new_html = get_youtube_embed_html(yt_url, initial_start_time)
-
-                    yield {  # Update UI for next speaker in same item
-                        current_speaker_index_state: next_speaker_idx,
-                        current_start_times_state: next_start_times,
-                        current_clip_index_state: 0,
-                        labeling_progress_md: f"Labeling Speaker: **{next_speaker_id}** (Speaker {next_speaker_idx + 1}/{total_speakers}, Item {item_idx + 1}/{total_items_count})",
-                        current_clip_display: f"Preview 1 of {clip_count}",
-                        video_player_html: new_html,
-                        speaker_label_input: gr.update(value=""),  # Clear input
-                        prev_clip_btn: gr.update(interactive=(clip_count > 1)),
-                        next_clip_btn: gr.update(interactive=(clip_count > 1)),
-                        batch_status_output: current_status_text,  # Pass status through
-                    }
-                else:
-                    # --- Finished speakers for CURRENT item -> Finalize item & Transition UI ---
-                    log_info(
-                        f"[{batch_id}-{item_id}] Finished labeling speakers for item {item_id}. Triggering finalization."
-                    )
-                    current_status_text = (
-                        f"{current_status_text}\n\nFinalizing item {item_id}..."
-                    )
-                    yield {batch_status_output: gr.update(value=current_status_text)}
-
-                    # --- CALL ORCHESTRATOR to finalize item ---
-                    finalization_success = self.orchestrator.finalize_item(
-                        batch_id, item_id
-                    )
-
-                    if not finalization_success:
-                        log_error(
-                            f"[{batch_id}-{item_id}] Finalization failed after submitting last label."
+                    if not success:
+                        logger.warning(
+                            f"Failed to store label for {speaker_id} in orchestrator state."
                         )
-                        current_status_text = f"{current_status_text}\n\nERROR: Failed to finalize item {item_id}. Attempting to proceed..."
-                        yield {
-                            batch_status_output: gr.update(value=current_status_text)
+                        # Update status but continue
+                        current_status_text = f"{current_status_text}\n\nWARN: Failed to store label for {speaker_id}."
+                        yield {batch_status_output: gr.update(value=current_status_text)}
+                        # Proceed to next speaker anyway? Or halt? Current logic proceeds.
+
+                    # --- CALL ORCHESTRATOR to get next speaker in *same* item ---
+                    next_speaker_data = self.orchestrator.get_next_labeling_speaker(
+                        batch_id, item_id, speaker_idx
+                    )
+
+                    if next_speaker_data:
+                        # --- Still more speakers in the CURRENT item ---
+                        next_speaker_id, yt_url, next_start_times = next_speaker_data
+                        next_speaker_idx = speaker_idx + 1
+                        initial_start_time = next_start_times[0] if next_start_times else 0
+                        clip_count = len(next_start_times)
+                        total_speakers = len(speakers_to_label)
+                        total_items_count = len(items_to_label)
+                        new_html = get_youtube_embed_html(yt_url, initial_start_time)
+
+                        yield {  # Update UI for next speaker in same item
+                            current_speaker_index_state: next_speaker_idx,
+                            current_start_times_state: next_start_times,
+                            current_clip_index_state: 0,
+                            labeling_progress_md: f"Labeling Speaker: **{next_speaker_id}** (Speaker {next_speaker_idx + 1}/{total_speakers}, Item {item_idx + 1}/{total_items_count})",
+                            current_clip_display: f"Preview 1 of {clip_count}",
+                            video_player_html: new_html,
+                            speaker_label_input: gr.update(value=""),  # Clear input
+                            prev_clip_btn: gr.update(interactive=(clip_count > 1)),
+                            next_clip_btn: gr.update(interactive=(clip_count > 1)),
+                            batch_status_output: current_status_text,  # Pass status through
                         }
                     else:
-                        current_status_text = f"{current_status_text}\n\nItem {item_id} finalized successfully."
-                        yield {
-                            batch_status_output: gr.update(value=current_status_text)
-                        }
+                        # --- Finished speakers for CURRENT item -> Finalize item & Transition UI ---
+                        logger.info(
+                            f"[{batch_id}-{item_id}] Finished labeling speakers for item {item_id}. Triggering finalization."
+                        )
+                        current_status_text = (
+                            f"{current_status_text}\n\nFinalizing item {item_id}..."
+                        )
+                        yield {batch_status_output: gr.update(value=current_status_text)}
 
-                    # Now call the UI transition generator to move to next item or finish batch
-                    yield from move_to_next_labeling_state(
-                        batch_id, items_to_label, item_idx, current_status_text
-                    )
+                        # --- CALL ORCHESTRATOR to finalize item ---
+                        finalization_success = self.orchestrator.finalize_item(
+                            batch_id, item_id
+                        )
+
+                        if not finalization_success:
+                            logger.error(
+                                f"[{batch_id}-{item_id}] Finalization failed after submitting last label."
+                            )
+                            current_status_text = f"{current_status_text}\n\nERROR: Failed to finalize item {item_id}. Attempting to proceed..."
+                            yield {
+                                batch_status_output: gr.update(value=current_status_text)
+                            }
+                        else:
+                            current_status_text = f"{current_status_text}\n\nItem {item_id} finalized successfully."
+                            yield {
+                                batch_status_output: gr.update(value=current_status_text)
+                            }
+
+                        # Now call the UI transition generator to move to next item or finish batch
+                        yield from move_to_next_labeling_state(
+                            batch_id, items_to_label, item_idx, current_status_text
+                        )
+                except TransmotifyError as e:
+                    logger.exception(f"Error during label submission: {e}")
+                    yield {
+                        batch_status_output: gr.update(
+                            value=f"{current_status_text}\n\nERROR: {e}"
+                        ),
+                    }
 
             def handle_skip_item_wrapper(
                 batch_id: str,
@@ -714,7 +736,7 @@ class UI:
                     or not items_to_label
                     or item_idx >= len(items_to_label)
                 ):
-                    log_error(
+                    logger.error(
                         f"Skip item called with invalid state: {batch_id=}, {item_idx=}, {len(items_to_label)=}"
                     )
                     yield {
@@ -725,7 +747,7 @@ class UI:
                     return
 
                 item_id = items_to_label[item_idx]
-                log_info(
+                logger.info(
                     f"[{batch_id}-{item_id}] UI skipping rest of speakers for item."
                 )
                 current_status_text = (
@@ -733,23 +755,31 @@ class UI:
                 )
                 yield {batch_status_output: gr.update(value=current_status_text)}
 
-                # --- CALL ORCHESTRATOR to handle skip (which includes finalize) ---
-                success = self.orchestrator.skip_item_labeling(batch_id, item_id)
+                try:
+                    # --- CALL ORCHESTRATOR to handle skip (which includes finalize) ---
+                    success = self.orchestrator.skip_item_labeling(batch_id, item_id)
 
-                if not success:
-                    log_warning(
-                        f"[{batch_id}-{item_id}] Orchestrator finalize/skip returned failure, but attempting UI transition."
+                    if not success:
+                        logger.warning(
+                            f"[{batch_id}-{item_id}] Orchestrator finalize/skip returned failure, but attempting UI transition."
+                        )
+                        current_status_text = f"{current_status_text}\n\nWARN: Finalization during skip failed for item {item_id}."
+                        yield {batch_status_output: gr.update(value=current_status_text)}
+                    else:
+                        current_status_text = f"{current_status_text}\n\nItem {item_id} skipped and finalized."
+                        yield {batch_status_output: gr.update(value=current_status_text)}
+
+                    # Call the common UI transition logic
+                    yield from move_to_next_labeling_state(
+                        batch_id, items_to_label, item_idx, current_status_text
                     )
-                    current_status_text = f"{current_status_text}\n\nWARN: Finalization during skip failed for item {item_id}."
-                    yield {batch_status_output: gr.update(value=current_status_text)}
-                else:
-                    current_status_text = f"{current_status_text}\n\nItem {item_id} skipped and finalized."
-                    yield {batch_status_output: gr.update(value=current_status_text)}
-
-                # Call the common UI transition logic
-                yield from move_to_next_labeling_state(
-                    batch_id, items_to_label, item_idx, current_status_text
-                )
+                except TransmotifyError as e:
+                    logger.exception(f"Error skipping item: {e}")
+                    yield {
+                        batch_status_output: gr.update(
+                            value=f"{current_status_text}\n\nERROR: {e}"
+                        ),
+                    }
 
             # --- Event Listeners ---
             # Define outputs list once for state components often updated together
@@ -861,23 +891,43 @@ class UI:
     def launch(self, **kwargs):
         """Creates and launches the Gradio interface."""
         if not GRADIO_AVAILABLE:
-            log_error("Cannot launch UI: Gradio or Pandas not available.")
-            # Potentially raise here to prevent main.py from continuing?
-            # raise ImportError("Gradio or Pandas not found, UI cannot be launched.")
-            return  # Or just return if main.py handles this
+            logger.error("Cannot launch UI: Gradio or Pandas not available.")
+            raise ResourceAccessError("Gradio or Pandas not found, UI cannot be launched.")
 
         try:
-            log_info("Creating Gradio UI...")
+            logger.info("Creating Gradio UI...")
             gradio_app = self.create_ui()
-            log_info("Launching Gradio UI...")
+            logger.info("Launching Gradio UI...")
             # Pass launch kwargs (e.g., server_name, share)
             gradio_app.launch(**kwargs)
         except Exception as e:
             # Catch errors specifically during UI creation or launch
-            log_error(f"FATAL ERROR during Gradio UI creation or launch: {e}")
-            log_error(traceback.format_exc())
+            logger.exception(f"FATAL ERROR during Gradio UI creation or launch: {e}")
             print(
                 f"\nFATAL ERROR: Could not launch Gradio UI. Check logs. Error: {e}\n"
             )
             # Re-raise the exception so the main script knows launch failed
             raise
+
+
+# Entry point for direct execution
+def main():
+    try:
+        # Example of a top-level "boundary" to handle uncaught exceptions gracefully
+        from core.orchestrator import Orchestrator
+        from core.config import Config
+        
+        config = Config()
+        orchestrator = Orchestrator(config)
+        ui = UI(orchestrator)
+        ui.launch(server_name="127.0.0.1", server_port=7860)
+    except TransmotifyError as err:
+        logger.error("Application failed: %s", err, exc_info=True)
+        sys.exit(1)
+    except Exception as err:
+        logger.exception("Unexpected error occurred: %s", err)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
