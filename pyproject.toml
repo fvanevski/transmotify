@@ -1,0 +1,55 @@
+[project]
+name = "transmotify"
+version = "0.1.0"
+description = "A tool for multimodal emotion and deception analysis using audio, text, and video."
+readme = "README.md" # Assuming a README file exists or will be created
+requires-python = ">=3.11" # Based on common requirements for the listed libraries and uv init default
+
+dependencies = [
+    "transformers",
+    "speechbrain",
+    "whisperx",
+    "pyannote.audio", # Required by whisperx for diarization
+    "numpy",
+    "pandas",
+    "matplotlib",
+    "rapidfuzz",
+    "gradio",
+    "yt-dlp", # For YouTube downloads
+    "opencv-python", # For video processing (used by DeepFace implicitly or explicitly)
+    "openpyxl",
+    "onnxruntime==1.21.1",
+    "onnxruntime-gpu",
+    # torch and torchvision are specified via tool.uv.sources below for specific index
+    "torch",
+    "torchvision",
+    # "torchaudio", # Include if audio manipulation beyond torch/torchvision is needed
+]
+
+[tool.uv.sources]
+# Configure PyTorch and torchvision to be installed from a specific index
+# This is crucial for selecting CUDA-enabled builds.
+# You might need to adjust the index URL based on your exact CUDA driver version (e.g., cu121, cu124, cu12x).
+# Refer to https://pytorch.org/get-started/locally/ for the correct URL for your setup.
+torch = [
+    { index = "pytorch-cuda" }
+]
+torchvision = [
+    { index = "pytorch-cuda" }
+]
+# If torchaudio is needed and specified in dependencies, add it here too:
+# torchaudio = [
+#     { index = "pytorch-cuda" }
+# ]
+
+
+[[tool.uv.index]]
+name = "pytorch-cuda"
+# EXAMPLE CUDA 12.x INDEX URL - **VERIFY THIS against https://pytorch.org/get-started/locally/ for your specific CUDA driver version.**
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true # Ensures this index is ONLY used for packages explicitly listed in tool.uv.sources
+
+# Add PyPI back as the default index for all other dependencies
+[[tool.uv.index]]
+name = "pypi"
+url = "https://pypi.org/simple/"
