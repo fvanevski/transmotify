@@ -95,42 +95,54 @@ class Config:
         }
 
     def _load_config(self):
-        """Loads configuration from defaults, JSON file, and environment variables."""
+        """Loads configuration from defaults, JSON file, and environment variables.
+        If a key in the JSON file has a 'null' (None) value, the hardcoded default for that key is used.
+        """
         defaults = self._load_defaults()
-        loaded_config = {}
+        
+        # Start with a copy of the defaults
+        self.config = defaults.copy()
+        logger.info("Loaded configuration defaults.")
 
         # Load from JSON file if it exists
         if self.config_file.exists():
             try:
                 with open(self.config_file, "r", encoding="utf-8") as f:
-                    loaded_config = json.load(f)
+                    loaded_config_from_json = json.load(f)
                 logger.info(f"Loaded configuration overrides from {self.config_file}")
+
+                # Iterate through items loaded from JSON.
+                # Only override a default if the value in config.json is not None.
+                for key, value in loaded_config_from_json.items():
+                    if key in self.config: # Ensure the key is a known config parameter
+                        if value is not None:
+                            self.config[key] = value
+                            logger.debug(f"Overriding '{key}' with value from config.json: {value}")
+                        else:
+                            logger.debug(f"Key '{key}' is null in config.json, using default: {self.config[key]}")
+                    else:
+                        logger.warning(f"Unknown key '{key}' found in {self.config_file}. Ignoring.")
+                        
             except json.JSONDecodeError:
                 logger.warning(
                     f"Error decoding JSON from {self.config_file}. Using defaults/env vars only."
-                )  # Changed log level
+                )
             except Exception as e:
                 logger.warning(
                     f"Error loading {self.config_file}: {e}. Using defaults/env vars only."
-                )  # Changed log level
+                )
         else:
             logger.info(
                 f"Configuration file {self.config_file} not found. Using default configuration and environment variables."
             )
 
-        # Merge defaults and loaded config
-        self.config = {**defaults, **loaded_config}
-        logger.info("Merged defaults and file configuration.")
-
         # Override specific critical settings with environment variables
+        # This logic remains the same and will apply after defaults and JSON processing.
         env_hf_token = os.getenv("HF_TOKEN")
         if env_hf_token:
             self.config["hf_token"] = env_hf_token
             logger.info("Overriding 'hf_token' with environment variable HF_TOKEN.")
-        elif not self.config.get("hf_token"):
-            # Warning issued during validation if needed
-            pass
-
+        
         env_device = os.getenv("DEVICE")
         if env_device and env_device in ["cuda", "cpu"]:
             self.config["device"] = env_device

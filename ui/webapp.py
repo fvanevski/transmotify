@@ -358,7 +358,7 @@ class UI:
 
                             yield {
                                 batch_job_id_state: current_batch_job_id,
-                                items_to_label_state: items_requiring_labeling,
+                                items_to_label_state: list(items_requiring_labeling), # Corrected: wrap the variable with list()
                                 current_item_index_state: 0,
                                 current_youtube_url_state: yt_url,
                                 eligible_speakers_state: eligible_speakers_list,
@@ -699,7 +699,7 @@ class UI:
 
                         # Now call the UI transition generator to move to next item or finish batch
                         yield from move_to_next_labeling_state(
-                            batch_id, items_to_label, item_idx, current_status_text
+                            batch_id, items_to_label, item_idx, current_status_text # Pass the original item_idx
                         )
                 except TransmotifyError as e:
                     logger.exception(f"Error during label submission: {e}")
@@ -731,6 +731,8 @@ class UI:
                     }
                     return
 
+                logger.info(f"[{batch_id}] handle_skip_item_wrapper: Received items_to_label={items_to_label}, item_idx={item_idx}")
+
                 item_id = items_to_label[item_idx]
                 logger.info(
                     f"[{batch_id}-{item_id}] UI skipping rest of speakers for item."
@@ -756,7 +758,7 @@ class UI:
 
                     # Call the common UI transition logic
                     yield from move_to_next_labeling_state(
-                        batch_id, items_to_label, item_idx, current_status_text
+                        batch_id, items_to_label, item_idx, current_status_text # Pass the original item_idx
                     )
                 except TransmotifyError as e:
                     logger.exception(f"Error skipping item: {e}")

@@ -54,7 +54,7 @@ def create_directory(path: Union[str, Path]) -> bool:
 
 # Refactored from core/utils.py:get_temp_file
 # Renamed for clarity
-def get_temp_file_path(suffix: str = "") -> Optional[Path]:
+def get_temp_file_path(temp_dir_base_path: Path, suffix: str = "") -> Optional[Path]:
     """Creates a temporary file and returns its Path object, or None on failure."""
     try:
         # Note: This creates a file in the system's default temp location,
