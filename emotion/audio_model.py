@@ -99,17 +99,25 @@ class AudioEmotionModel:
                 del load_params["savedir"]
 
             self.model = foreign_class(**load_params)
+            # self.model = foreign_class(
+            #     source=self.model_source,
+            #     pymodule_file=self.pymodule_file, # This might need adjustment based on the specific SpeechBrain model
+            #     classname=self.classname, # This might need adjustment
+            #     run_opts={"device": self.device}
+            # )
 
             # Attempt to get labels from the loaded model (if available)
-            if hasattr(self.model, "hparams") and "label_encoder" in self.model.hparams:
-                self.model_labels = self.model.hparams.label_encoder.allowed_labels
-                log_info(f"Audio model labels identified: {self.model_labels}")
-            else:
-                log_warning(
-                    "Could not automatically determine audio model labels from hparams."
-                )
+            # if hasattr(self.model, "hparams") in self.model.hparams:
+            #     self.model_labels = self.model.hparams.label_encoder.allowed_labels
+            #     log_info(f"Audio model labels identified: {self.model_labels}")
+            # else:
+            #     self.model_labels = ['hap', 'sad', 'ang', 'neu'] # Example order, verify with model output
+            #     self.text_labels = ['anger', 'disgust', 'fear', 'joy', 'neutral', 'sadness', 'surprise']
+            #     log_warning(
+            #         "Could not automatically determine audio model labels from hparams."
+            #     )
                 # Consider adding a manual way to set labels if needed
-
+            self.model_labels = ['hap', 'sad', 'ang', 'neu'] # Example order, verify with model output
             log_info("Audio emotion model loaded successfully.")
         except FileNotFoundError as fnf_e:
             log_error(

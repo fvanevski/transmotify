@@ -32,6 +32,11 @@ try:
 except ImportError:
     PANDAS_AVAILABLE = False
 
+try:
+    from utils.file_manager import create_directory
+except ImportError:
+    def create_directory(message: str):
+        print(f"ERROR (File manager unavailable): {message}")
 
 # Assuming core.logging is established from Phase 1
 try:

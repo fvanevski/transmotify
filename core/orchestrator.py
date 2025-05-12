@@ -308,7 +308,7 @@ class Orchestrator:
                 raise InputDataError(f"Failed to read Excel file: {input_source}") from e
 
             # Get labeling config... (same as before)
-            enable_labeling = self.config.get("enable_interactive_labeling", False)
+            enable_labeling = self.config.get("enable_interactive_labeling", True)
             labeling_min_total_time = float(
                 self.config.get("speaker_labeling_min_total_time", 15.0)
             )
@@ -463,7 +463,7 @@ class Orchestrator:
                         device=self.config.get("device", "cpu"),
                         compute_type=self.config.get("whisper_compute_type", "float16"),
                         language=self.config.get("whisper_language"),
-                        batch_size=self.config.get("whisper_batch_size", 16),
+                        batch_size=self.config.get("whisper_batch_size", 32),
                         hf_token=self.config.get("hf_token"),
                         min_speakers=self.config.get("diarization_min_speakers"),
                         max_speakers=self.config.get("diarization_max_speakers"),
@@ -759,7 +759,7 @@ class Orchestrator:
                 and labeling_is_required_overall
             ):
                 logger.info(f"{log_prefix} Keeping batch log open.")
-            cleanup_temp = self.config.get("cleanup_temp_on_success", True)
+            cleanup_temp = self.config.get("cleanup_temp_on_success", False)
             batch_finished_without_labeling = (return_batch_id is None) and (
                 total_processed_or_pending > 0 or failed_count == total_items
             )
@@ -852,7 +852,20 @@ class Orchestrator:
                 logger.info(f"{item_log_prefix} Calculating emotion summary...")
                 summary_data = calculate_emotion_summary(
                     segments=relabeled_segments,
-                    emotion_value_map=self.config.get("emotion_value_map", {}),
+                    emotion_value_map=self.config.get("emotion_value_map", {  # Used for scoring/volatility calculations [cite: 26]
+                        "joy": 1.0,
+                        "love": 0.8,
+                        "surprise": 0.5,
+                        "neutral": 0.0,
+                        "fear": -1.5,
+                        "sadness": -1.0,
+                        "disgust": -1.8,
+                        "anger": -2.0,
+                        "unknown": 0.0,
+                        "analysis_skipped": 0.0,
+                        "analysis_failed": 0.0,
+                        "no_text": 0.0,
+                    }),
                     include_timeline=True,
                     log_prefix=item_log_prefix,
                 )
@@ -892,7 +905,20 @@ class Orchestrator:
                     summary_data=summary_data,
                     output_dir=plot_output_dir,
                     file_prefix=f"{item_identifier}",
-                    emotion_value_map=self.config.get("emotion_value_map", {}),
+                    emotion_value_map=self.config.get("emotion_value_map", {  # Used for scoring/volatility calculations [cite: 26]
+                        "joy": 1.0,
+                        "love": 0.8,
+                        "surprise": 0.5,
+                        "neutral": 0.0,
+                        "fear": -1.5,
+                        "sadness": -1.0,
+                        "disgust": -1.8,
+                        "anger": -2.0,
+                        "unknown": 0.0,
+                        "analysis_skipped": 0.0,
+                        "analysis_failed": 0.0,
+                        "no_text": 0.0,
+                    }),
                     emotion_colors=self.config.get("emotion_colors", {}),
                     log_prefix=item_log_prefix,
                 )
@@ -1105,7 +1131,7 @@ class Orchestrator:
                 files_to_add=files_for_zip_cast,
                 log_prefix=log_prefix,
             )
-            cleanup_temp = self.config.get("cleanup_temp_on_success", True)
+            cleanup_temp = self.config.get("cleanup_temp_on_success", False)
             if zip_path and cleanup_temp and batch_work_path.exists():
                 logger.info(
                     f"{log_prefix} Cleaning up batch temp dir after ZIP: {batch_work_path}"

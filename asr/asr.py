@@ -35,7 +35,7 @@ def run_whisperx(
     audio_path: Path,
     output_dir: Path,
     # Core Model Config
-    model_size: str = "large-v3",
+    model_size: str = "large-v3-turbo",
     device: str = "cpu",
     compute_type: str = "float16",
     # Language & Batching
@@ -96,7 +96,11 @@ def run_whisperx(
         str(audio_path),
         "--model",
         model_size,
-        "--diarize",  # Always enable diarization as per original logic
+        "--diarize", # Always enable diarization as per original logic
+        "--beam_size",
+        "5",
+        "--chunk_size",
+        "25",
         "--output_dir",
         str(output_dir),
         "--output_format",

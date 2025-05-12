@@ -42,9 +42,9 @@ class Config:
             "hf_token": None,  # Recommended to set via HF_TOKEN env var
             "device": "cpu",  # Can be overridden by DEVICE env var ('cuda' or 'cpu')
             # --- Model Configurations ---
-            "whisper_model_size": "large-v3",
+            "whisper_model_size": "large-v3-turbo",
             "whisper_language": "auto",  # Set to specific language code (e.g., "en") if needed
-            "whisper_batch_size": 16,
+            "whisper_batch_size": 32,  # Batch size for Whisper model
             "whisper_compute_type": "float16",  # e.g., "float16", "int8_float16", "int8"
             "audio_emotion_model": "speechbrain/emotion-recognition-wav2vec2-IEMOCAP",
             "pyannote_diarization_model": "pyannote/speaker-diarization-3.1",  # Requires hf_token
@@ -57,9 +57,9 @@ class Config:
             # --- Report Flags ---
             "include_json_summary": True,  # Generate detailed emotion_summary.json
             "include_csv_summary": False,  # Generate high-level emotion_summary.csv
-            "include_script_transcript": False,  # Generate simple script_transcript.txt
+            "include_script_transcript": True,  # Generate simple script_transcript.txt
             "include_plots": False,  # Generate emotion plots
-            "include_source_audio": True,  # Include original audio in final zip
+            "include_source_audio": False,  # Include original audio in final zip
             # --- Cleanup Flag ---
             "cleanup_temp_on_success": True,  # Delete temp folder after successful run
             # --- Interactive Speaker Labeling ---
@@ -91,7 +91,6 @@ class Config:
             "final_zip_suffix": "_final_bundle.zip",  # Suffix for final batch zip [cite: 27]
             "default_snippet_match_threshold": 0.80,  # Default fuzzy match score (0.0-1.0) [cite: 27]
             # --- Deprecated/Potentially Unused (kept for reference) ---
-            "batch_size": 10,  # Seems unused in favor of whisper_batch_size [cite: 8]
             "snippet_match_threshold": 0.80,  # Deprecated in favor of default_snippet_match_threshold [cite: 8]
         }
 

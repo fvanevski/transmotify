@@ -65,30 +65,16 @@ def get_youtube_embed_html(youtube_url: str, start_time_seconds: int = 0) -> str
         return "<p>Invalid YouTube URL</p>"
 
     video_id = None
-    # Handle common YouTube URL formats (including potential youtube.com/watch?v=... )
-    patterns = [
-        r"v=([a-zA-Z0-9_-]{11})",  # Standard watch URL
-        r"youtu\.be/([a-zA-Z0-9_-]{11})",  # Shortened URL
-        r"embed/([a-zA-Z0-9_-]{11})",  # Embed URL
-        # Added more robust handling for shorts URLs
-        r"youtube\.com/shorts/([a-zA-Z0-9_-]{11})",
-        # User content URL pattern might be less common or stable
-        # r"googleusercontent\.com/youtube\.com/\d+/([a-zA-Z0-9_-]{11})",
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, youtube_url)
-        if match:
-            video_id = match.group(1)
-            break
+    if "youtube.com/watch?v=" in youtube_url:
+        video_id = youtube_url.split("v=")[1].split("&")[0]
+    elif "youtu.be/" in youtube_url:
+        video_id = youtube_url.split("youtu.be/")[1].split("?")[0]
+    elif "youtube.com/live/" in youtube_url:
+        video_id = youtube_url.split("youtube.com/live/")[1].split("?")[0]
 
     if not video_id:
-        logger.warning(f"Could not extract Video ID from URL: {youtube_url}")
-        return f"<p>Could not extract Video ID from URL: {youtube_url}</p>"  # Show URL in error
-
-    start_param = max(
-        0, int(math.floor(start_time_seconds))
-    )  # Ensure non-negative integer
-    # Use standard YouTube embed URL
+        return f"<p>Could not extract Video ID from URL: {youtube_url}</p>"
+    start_param = int(math.floor(start_time_seconds))
     embed_url = (
         f"https://www.youtube.com/embed/{video_id}?start={start_param}&controls=1"
     )
@@ -485,13 +471,12 @@ class UI:
             ) -> Generator[Dict, Any, Any]:
                 """Handles UI transitions AFTER an item is finalized."""
                 logger.info(
-                    f"[{batch_id}] UI moving state after finalizing item index {item_idx}"
+                    f"[{batch_id}] UI moving state after finalizing item index {item_idx} out of {len(items_to_label)}"
                 )
 
-                next_item_idx = item_idx + 1
-
-                if next_item_idx < len(items_to_label):
+                if item_idx < len(items_to_label) - 1:
                     # --- Move UI to the NEXT item ---
+                    next_item_idx = item_idx + 1
                     next_item_id = items_to_label[next_item_idx]
                     logger.info(
                         f"[{batch_id}] Moving UI to label next item: {next_item_id} (index {next_item_idx})"
