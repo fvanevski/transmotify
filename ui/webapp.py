@@ -13,6 +13,7 @@ import math
 import sys
 from pathlib import Path
 from typing import Dict, Any, Optional, Tuple, List, Generator, Union, TYPE_CHECKING
+from urllib.parse import urlparse, parse_qs
 
 # Import logging module for module-level logger
 import logging
@@ -51,11 +52,62 @@ except ImportError as e:
     logger.exception("Failed to import core modules (Orchestrator). Ensure PYTHONPATH is correct.")
     raise ResourceAccessError("Critical component Orchestrator failed to import.") from e
 
+# ── 1. Robust pattern for all mainstream YouTube URL shapes ──────────
+_YT_REGEX = re.compile(
+    r"""
+    (?:https?://)?              # optional http(s)://
+    (?:www\.)?                  # optional www.
+    (?:
+        (?:youtube\.com/
+            (?:                 # ── youtube.com/*
+                watch\?[^#]*v=  #   • watch?v=VIDEOID
+              | (?:live/        #   • live/VIDEOID
+                |shorts/        #   • shorts/VIDEOID
+                |embed/)        #   • embed/VIDEOID
+            )
+        )
+      | youtu\.be/              # ── youtu.be/VIDEOID
+    )
+    (?P<id>[A-Za-z0-9_-]{11})   # ← capture the 11‑char video ID
+    """,
+    re.VERBOSE,
+)
 
-# --- Helper to generate YouTube embed HTML ---
-# Moved from legacy ui/main_gui.py
+# ── 2. Helper to extract YouTube video ID from URL ─────────────────
+def _extract_video_id(url: str) -> Optional[str]:
+    """Return the 11‑char YouTube video ID (or None if not found)."""
+    m = _YT_REGEX.search(url)
+    if m:
+        return m.group("id")
+
+    # Fallback: handle exotic watch URLs whose query string still has v=ID
+    qs = parse_qs(urlparse(url).query)
+    if "v" in qs and qs["v"]:
+        return qs["v"][0]
+    return None
+
+# ── 3. Build YouTube embed HTML from URL and start time ─────────────
+def build_youtube_embed(url: str, start_time_seconds: float = 0) -> Optional[str]:
+    """
+    Convert any recognised YouTube URL to its embeddable form.
+    Returns None if the URL isn't recognisably YouTube.
+    """
+    vid = _extract_video_id(url)
+    if not vid:
+        return None
+
+    start = int(math.floor(start_time_seconds))
+    embed_url = f"https://www.youtube.com/embed/{vid}?start={start}&controls=1"
+    return (
+        f'<iframe width="560" height="315" src="{embed_url}" '
+        f'title="YouTube video player" frameborder="0" '
+        f'allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" '
+        f'referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>'
+    )
+
+"""
+── 4. YouTube embed HTML generation with error handling ─────────────
 def get_youtube_embed_html(youtube_url: str, start_time_seconds: int = 0) -> str:
-    """Creates HTML for embedding a YouTube video starting at a specific time."""
     if (
         not youtube_url
         or not isinstance(youtube_url, str)
@@ -64,16 +116,33 @@ def get_youtube_embed_html(youtube_url: str, start_time_seconds: int = 0) -> str
         logger.warning(f"Invalid YouTube URL for embed: {youtube_url}")
         return "<p>Invalid YouTube URL</p>"
 
-    video_id = None
-    if "youtube.com/watch?v=" in youtube_url:
-        video_id = youtube_url.split("v=")[1].split("&")[0]
-    elif "youtu.be/" in youtube_url:
-        video_id = youtube_url.split("youtu.be/")[1].split("?")[0]
-    elif "youtube.com/live/" in youtube_url:
-        video_id = youtube_url.split("youtube.com/live/")[1].split("?")[0]
+    # --- REVISED: Use regex to extract video ID more reliably ---
+    video_id_match = re.search(r"(?:v=|embed/|youtu.be/)([\w-]+)", youtube_url)
+    if not video_id_match:
+         # Attempt to parse some specific Googleusercontent formats based on previous logic
+         if "googleusercontent.com/youtube.com/0" in youtube_url:
+              match = re.search(r"v=([\w-]+)", youtube_url)
+              if match:
+                   video_id = match.group(1)
+         elif "googleusercontent.com/youtube.com/1" in youtube_url:
+              match = re.search(r"/1([\w-]+)", youtube_url)
+              if match:
+                   video_id = match.group(1)
+         elif "googleusercontent.com/youtube.com/2" in youtube_url:
+              match = re.search(r"/2([\w-]+)", youtube_url)
+              if match:
+                   video_id = match.group(1)
+         else:
+              logger.warning(f"Could not extract Video ID from URL: {youtube_url}")
+              return f"<p>Could not extract Video ID from URL: {youtube_url}</p>"
+    else:
+        video_id = video_id_match.group(1)
 
     if not video_id:
-        return f"<p>Could not extract Video ID from URL: {youtube_url}</p>"
+        # Fallback if regex failed but specific checks didn't match either
+         logger.warning(f"Could not extract Video ID from URL: {youtube_url}")
+         return f"<p>Could not extract Video ID from URL: {youtube_url}</p>"
+
     start_param = int(math.floor(start_time_seconds))
     embed_url = (
         f"https://www.youtube.com/embed/{video_id}?start={start_param}&controls=1"
@@ -86,7 +155,7 @@ def get_youtube_embed_html(youtube_url: str, start_time_seconds: int = 0) -> str
         f'allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" '
         f'referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>'
     )
-
+"""
 
 # --- Main UI Class ---
 class UI:
@@ -351,7 +420,7 @@ class UI:
                                 first_start_times[0] if first_start_times else 0
                             )
                             clip_count = len(first_start_times)
-                            initial_html = get_youtube_embed_html(
+                            initial_html = build_youtube_embed(
                                 yt_url, initial_start_time
                             )
                             total_labeling_items = len(items_requiring_labeling)
@@ -456,7 +525,7 @@ class UI:
                 #     return {}
 
                 new_start_time = start_times[new_clip_idx]
-                new_html = get_youtube_embed_html(youtube_url, new_start_time)
+                new_html = build_youtube_embed(youtube_url, new_start_time)
                 return {
                     current_clip_index_state: new_clip_idx,
                     video_player_html: new_html,
@@ -504,7 +573,7 @@ class UI:
                             )
                             clip_count = len(next_start_times)
                             total_items_count = len(items_to_label)
-                            new_html = get_youtube_embed_html(
+                            new_html = build_youtube_embed(
                                 next_yt_url, initial_start_time
                             )
 
@@ -654,7 +723,7 @@ class UI:
                         clip_count = len(next_start_times)
                         total_speakers = len(speakers_to_label)
                         total_items_count = len(items_to_label)
-                        new_html = get_youtube_embed_html(yt_url, initial_start_time)
+                        new_html = build_youtube_embed(yt_url, initial_start_time)
 
                         yield {  # Update UI for next speaker in same item
                             current_speaker_index_state: next_speaker_idx,
