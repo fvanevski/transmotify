@@ -34,6 +34,8 @@ config.json
 
 wav2vec2_checkpoints/
 
+wheels/
+
 .roomodes
 codebase.txt
 consolidate.py
@@ -44,3 +46,5 @@ transmotify.code-workspace
 uv.lock
 pyproject.toml
 codebase.md
+pyproject.toml
+pyproject.toml
