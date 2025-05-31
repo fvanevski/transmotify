@@ -40,7 +40,7 @@ class Config:
             "log_level": "INFO",
             # --- Core Processing Settings ---
             "hf_token": None,  # Recommended to set via HF_TOKEN env var
-            "device": "cpu",  # Can be overridden by DEVICE env var ('cuda' or 'cpu')
+            "device": "cuda",  # Can be overridden by DEVICE env var ('cuda' or 'cpu')
             # --- Model Configurations ---
             # "whisper_model_size": "large-v3-turbo", # WhisperX specific
             # "whisper_language": "auto",  # WhisperX specific
@@ -52,7 +52,7 @@ class Config:
             # --- Riva ASR Configuration ---
             "riva_server_uri": "localhost:50051",
             "riva_asr_language_code": "en-US",
-            "riva_max_speakers_diarization": 2, # Default max speakers for Riva diarization (None to disable explicit setting)
+            "riva_max_speakers_diarization": 5, # Default max speakers for Riva diarization (None to disable explicit setting)
             "riva_enable_automatic_punctuation": True,
             "riva_request_timeout_seconds": 120, # Client-side timeout for Riva ASR requests
             # --- Processing Parameters ---
