@@ -46,3 +46,6 @@ transmotify.code-workspace
 uv.lock
 pyproject.toml
 codebase.md
+test.json
+diar.py
+audio_item_002.wav
