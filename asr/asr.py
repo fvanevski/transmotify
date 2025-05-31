@@ -146,7 +146,7 @@ def run_riva_asr(
     # Riva specific params
     riva_server_uri: str = "localhost:50051",
     language_code: str = "en-US",
-    max_speakers_diarization: Optional[int] = None,
+    max_speakers_diarization: Optional[int] = 5,
     enable_automatic_punctuation: bool = True,
     riva_request_timeout: Optional[float] = None, # Added timeout parameter
     # Output discovery compatibility
@@ -197,7 +197,7 @@ def run_riva_asr(
         config = riva.client.RecognitionConfig(
             language_code=language_code, # Use passed-in language_code
             max_alternatives=1,
-            enable_automatic_punctuation=enable_automatic_punctuation, # Use passed-in parameter
+            enable_automatic_punctuation=True,
             enable_word_time_offsets=True,
         )
 
@@ -215,7 +215,7 @@ def run_riva_asr(
         if riva_request_timeout is not None and riva_request_timeout > 0:
             logger.info(f"{log_prefix} Using request timeout of {riva_request_timeout} seconds.")
             response: rasr.RecognizeResponse = asr_service.offline_recognize(
-                data, config, timeout=riva_request_timeout
+                data, config
             )
         else:
             response: rasr.RecognizeResponse = asr_service.offline_recognize(data, config)
