@@ -42,15 +42,20 @@ class Config:
             "hf_token": None,  # Recommended to set via HF_TOKEN env var
             "device": "cpu",  # Can be overridden by DEVICE env var ('cuda' or 'cpu')
             # --- Model Configurations ---
-            "whisper_model_size": "large-v3-turbo",
-            "whisper_language": "auto",  # Set to specific language code (e.g., "en") if needed
-            "whisper_batch_size": 32,  # Batch size for Whisper model
-            "whisper_compute_type": "float16",  # e.g., "float16", "int8_float16", "int8"
+            # "whisper_model_size": "large-v3-turbo", # WhisperX specific
+            # "whisper_language": "auto",  # WhisperX specific
+            # "whisper_batch_size": 32,  # WhisperX specific
+            # "whisper_compute_type": "float16",  # WhisperX specific
             "audio_emotion_model": "speechbrain/emotion-recognition-wav2vec2-IEMOCAP",
-            "pyannote_diarization_model": "pyannote/speaker-diarization-3.1",  # Requires hf_token
+            # "pyannote_diarization_model": "pyannote/speaker-diarization-3.1",  # Diarization now part of Riva ASR
             "deepface_detector_backend": "opencv",  # e.g., 'opencv', 'ssd', 'dlib', 'mtcnn', 'retinaface'
+            # --- Riva ASR Configuration ---
+            "riva_server_uri": "localhost:50051",
+            "riva_asr_language_code": "en-US",
+            "riva_max_speakers_diarization": 2, # Default max speakers for Riva diarization (None to disable explicit setting)
+            "riva_enable_automatic_punctuation": True,
             # --- Processing Parameters ---
-            "min_diarization_duration": 5.0,  # Minimum audio duration for diarization attempt
+            "min_diarization_duration": 5.0,  # Minimum audio duration for diarization attempt (may still be relevant for deciding to call ASR with diarization)
             "visual_frame_rate": 1,  # Frames per second for visual analysis
             "text_fusion_weight": 0.6,  # Weight for text emotion in fusion
             "audio_fusion_weight": 0.4,  # Weight for audio emotion in fusion
@@ -159,14 +164,12 @@ class Config:
         logger.info("Validating configuration...")
         hf_token = self.config.get("hf_token")
         # Allow hf_token to be None, but warn if diarization models are selected later?
-        # For now, only warn if it's missing *and* diarization model looks like default pyannote
-        is_pyannote_default = "pyannote/speaker-diarization" in self.config.get(
-            "pyannote_diarization_model", ""
-        )
-        if not hf_token and is_pyannote_default:
+        # For now, only warn if it's missing. The specific check for Pyannote model is removed.
+        # If hf_token is needed for other models in the future, this warning remains generally useful.
+        if not hf_token:
             logger.warning(
                 "Hugging Face token ('hf_token') is missing (checked config and HF_TOKEN env var). "
-                "The default Pyannote diarization model requires a token. Diarization may fail."
+                "Some Hugging Face models may require a token for download or use."
             )
         elif hf_token:
             logger.info("Hugging Face token is configured.")

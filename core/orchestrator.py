@@ -1,5 +1,6 @@
 # core/orchestrator.py
 # REVISED: Skips visual analysis call for YouTube URLs based on user clarification.
+# REVISED: Integrates Riva ASR call.
 """
 Orchestrates the end-to-end speech analysis pipeline, coordinating calls to
 specialized modules for configuration, I/O, ASR, emotion analysis, speaker ID, etc.
@@ -51,7 +52,7 @@ try:
     from yt.downloader import download_youtube_stream
     from yt.converter import convert_to_wav, check_audio_duration
     from yt.metadata import fetch_youtube_metadata
-    from asr.asr import run_whisperx
+    from asr.asr import run_riva_asr # Updated import for Riva ASR
     from emotion.text_model import TextEmotionModel
     from emotion.audio_model import AudioEmotionModel
     from emotion.visual_model import VisualEmotionModel
@@ -74,11 +75,9 @@ except ImportError as e:
     raise ResourceAccessError(f"Orchestrator failed to import core components: {e}") from e
 
 # Type Aliases (Consider moving to a types file if complex)
-# LabelingState = Dict[str, Dict[str, Any]]  # Removed duplicate definition
 BatchOutputFiles = Dict[
     str, Dict[str, Union[str, Path]]
 ]  # batch_job_id -> {file_type: path} # Match create_zip_archive
-# Type Hints
 EmotionSummary = Dict[str, Dict[str, Any]]
 SpeakerLabels = Optional[Dict[str, str]]
 LabelingItemState = Dict[str, Any]
@@ -91,7 +90,6 @@ class Orchestrator:
 
     def __init__(self, config: Config):
         self.config = config
-        # self.config: Dict[str, Any] = config.config # Removed redundant assignment
         self.labeling_state: LabelingState = {}
         self.batch_output_files: Dict[str, Dict[str, Path]] = {}
         logger.info("Orchestrator: Initializing emotion models...")
@@ -246,7 +244,6 @@ class Orchestrator:
         log_prefix = self._get_log_prefix(batch_job_id)
         logger.info(f"{log_prefix} Starting batch processing for: {input_source}")
 
-        # Initialize state, paths, counters... (same as before)
         batch_status_message = f"{log_prefix} Reading batch definition..."
         batch_results_list: List[str] = []
         base_temp_dir = Path(self.config.get("temp_dir", "./temp"))
@@ -257,10 +254,8 @@ class Orchestrator:
         pending_labeling_count = 0
         failed_count = 0
         labeling_is_required_overall = False
-        return_batch_id: Optional[str] = (
-            None  # Initialize for potential labeling return
-        )
-        total_processed_or_pending: int = 0  # Initialize counter
+        return_batch_id: Optional[str] = None
+        total_processed_or_pending: int = 0
         self.batch_output_files[batch_job_id] = {}
         self.labeling_state[batch_job_id] = {
             "output_flags": {
@@ -274,7 +269,6 @@ class Orchestrator:
         }
 
         try:
-            # Create work dir, setup logging... (same as before)
             if not create_directory(batch_work_path):
                 raise ResourceAccessError(
                     f"Failed to create batch work directory: {batch_work_path}"
@@ -286,7 +280,6 @@ class Orchestrator:
             logger.info(f"{log_prefix} Batch log file created at: {batch_log_path}")
             self.batch_output_files[batch_job_id][batch_log_path.name] = batch_log_path
 
-            # Read Input Source (XLSX assumed for now)... (same as before)
             if not Path(input_source).is_file() or not str(input_source).endswith(
                 ".xlsx"
             ):
@@ -307,7 +300,6 @@ class Orchestrator:
                 logger.exception(f"{log_prefix} Failed to read Excel file: {e}")
                 raise InputDataError(f"Failed to read Excel file: {input_source}") from e
 
-            # Get labeling config... (same as before)
             enable_labeling = self.config.get("enable_interactive_labeling", True)
             labeling_min_total_time = float(
                 self.config.get("speaker_labeling_min_total_time", 15.0)
@@ -318,21 +310,17 @@ class Orchestrator:
             logger.info(f"{log_prefix} Interactive Labeling Enabled: {enable_labeling}")
             items_requiring_labeling_list = []
 
-            # --- Item Processing Loop ---
-            # Use enumerate for a reliable 1-based index
             for item_index, (sequential_index, row) in enumerate(
                 df.iterrows(), start=1
             ):
-                # item_index = int(sequential_index) + 1 # Removed old index calculation
                 item_identifier = (
-                    f"item_{item_index:03d}"  # Use enumerate index directly
+                    f"item_{item_index:03d}"
                 )
                 item_log_prefix = self._get_log_prefix(batch_job_id, item_identifier)
                 logger.info(
                     f"{item_log_prefix} --- Processing item {item_index}/{total_items} ---"
                 )
 
-                # Get source URL/Path... (same as before)
                 source_url_or_path = row.get(url_col_name)
                 if (
                     not isinstance(source_url_or_path, str)
@@ -350,7 +338,6 @@ class Orchestrator:
                 is_youtube_url = source_url_or_path.startswith(("http:", "https:"))
                 is_local_file = not is_youtube_url and Path(source_url_or_path).exists()
 
-                # Create item work dir... (same as before)
                 item_work_path = batch_work_path / item_identifier
                 if not create_directory(item_work_path):
                     logger.error(
@@ -362,14 +349,12 @@ class Orchestrator:
                     )
                     continue
 
-                # --- Run Pipeline Stages ---
                 audio_input_path: Optional[Path] = None
                 metadata: Optional[Dict[str, Any]] = None
                 segments: Optional[SegmentsList] = None
                 processed_segments: Optional[SegmentsList] = None
 
                 try:
-                    # 1. Prepare Audio & Metadata (Download/Copy, Convert)... (same logic as before)
                     temp_audio_dir = item_work_path / "audio_temp"
                     create_directory(temp_audio_dir)
                     raw_dl_path = temp_audio_dir / f"raw_download_{item_identifier}"
@@ -434,7 +419,6 @@ class Orchestrator:
                             f"Input source is not a valid URL or existing local file: {source_url_or_path}"
                         )
 
-                    # 2. Duration Check... (same as before)
                     min_duration = float(
                         self.config.get("min_diarization_duration", 5.0)
                     )
@@ -443,7 +427,6 @@ class Orchestrator:
                     ):
                         logger.warning(f"{item_log_prefix} Audio duration too short.")
 
-                    # 3. Run ASR (WhisperX)... (same as before)
                     asr_output_dir = item_work_path / "asr_output"
                     create_directory(asr_output_dir)
                     excluded_asr_outputs = [
@@ -456,60 +439,44 @@ class Orchestrator:
                             "script_transcript_name",
                         ]
                     ]
-                    whisperx_json_path = run_whisperx(
+                    # Updated to call run_riva_asr with new parameters from config
+                    asr_json_path = run_riva_asr(
                         audio_path=audio_input_path,
                         output_dir=asr_output_dir,
-                        model_size=self.config.get("whisper_model_size", "large-v3"),
-                        device=self.config.get("device", "cpu"),
-                        compute_type=self.config.get("whisper_compute_type", "float16"),
-                        language=self.config.get("whisper_language"),
-                        batch_size=self.config.get("whisper_batch_size", 32),
-                        hf_token=self.config.get("hf_token"),
-                        min_speakers=self.config.get("diarization_min_speakers"),
-                        max_speakers=self.config.get("diarization_max_speakers"),
+                        riva_server_uri=self.config.get("riva_server_uri", "localhost:50051"),
+                        language_code=self.config.get("riva_asr_language_code", "en-US"),
+                        max_speakers_diarization=self.config.get("riva_max_speakers_diarization", 2),
+                        enable_automatic_punctuation=self.config.get("riva_enable_automatic_punctuation", True),
+                        # device parameter removed as it's not directly used by Riva client call
                         output_filename_exclusions=[
                             name for name in excluded_asr_outputs if name
                         ],
                         log_file_handle=log_file_handle,
                         log_prefix=item_log_prefix,
                     )
-                    if not whisperx_json_path:
-                        raise RuntimeError("ASR (WhisperX) execution failed.")
+                    if not asr_json_path: # Use the new path variable
+                        raise RuntimeError("ASR (Riva) execution failed.")
 
-                    # 4. Structure Transcript... (same as before)
-                    segments = convert_json_to_structured(whisperx_json_path)
+                    segments = convert_json_to_structured(asr_json_path) # Use the new path variable
                     if not segments:
                         logger.warning(
                             f"{item_log_prefix} No segments found after structuring ASR output."
                         )
 
-                    # 5. Run Emotion Analysis & Fusion (if segments exist)
                     if segments:
                         logger.info(
                             f"{item_log_prefix} Running emotion analysis for {len(segments)} segments..."
                         )
                         processed_segments = []
-                        visual_emotion_map: Optional[Dict[int, Optional[str]]] = (
-                            None  # Store visual results per segment index
-                        )
-
-                        # *** REVISED VISUAL ANALYSIS CALL ***
+                        visual_emotion_map: Optional[Dict[int, Optional[str]]] = None
                         video_path_for_visual: Optional[Path] = None
                         if is_local_file:
-                            # Basic check if local file might be video
-                            vid_extensions = [
-                                ".mp4",
-                                ".avi",
-                                ".mov",
-                                ".mkv",
-                                ".wmv",
-                            ]  # Add more if needed
+                            vid_extensions = [".mp4", ".avi", ".mov", ".mkv", ".wmv"]
                             local_path_obj = Path(source_url_or_path)
                             if local_path_obj.suffix.lower() in vid_extensions:
                                 video_path_for_visual = local_path_obj
 
                         if video_path_for_visual:
-                            # Only run visual analysis if we have a local video file path
                             logger.info(
                                 f"{item_log_prefix} Running visual emotion analysis on local file: {video_path_for_visual.name}"
                             )
@@ -522,12 +489,7 @@ class Orchestrator:
                             logger.info(
                                 f"{item_log_prefix} Skipping visual emotion analysis for YouTube URL (no local video file)."
                             )
-                            visual_emotion_map = (
-                                {}
-                            )  # Ensure it's an empty dict, not None
-                        # else: # Local file but not identified as video
-                        # log_info(f"{item_log_prefix} Skipping visual emotion analysis for local file (not identified as video).")
-                        # visual_emotion_map = {}
+                            visual_emotion_map = {}
 
                         for i, seg in enumerate(segments):
                             seg_log_prefix = f"{item_log_prefix} [Seg {i}]"
@@ -541,7 +503,6 @@ class Orchestrator:
                                 end_time=seg.get("end", 0.0),
                             )
                             seg["audio_emotion"] = audio_scores
-                            # Get visual result from pre-calculated map (will be None if YT or no map)
                             seg["visual_emotion"] = (
                                 visual_emotion_map.get(i)
                                 if visual_emotion_map
@@ -565,17 +526,14 @@ class Orchestrator:
                         logger.info(
                             f"{item_log_prefix} Emotion analysis and fusion complete."
                         )
-                    else:  # No segments
+                    else:
                         logger.warning(
                             f"{item_log_prefix} Skipping emotion analysis due to missing segments."
                         )
-                        processed_segments = (
-                            segments  # Pass original (empty) segments list
-                        )
+                        processed_segments = segments
+                    segments = processed_segments
 
-                    segments = processed_segments  # Use processed segments
-
-                except Exception as e:  # Catch errors in the pipeline steps
+                except Exception as e:
                     err_msg = (
                         f"{item_log_prefix} ERROR during item processing pipeline: {e}"
                     )
@@ -591,10 +549,9 @@ class Orchestrator:
                         try:
                             shutil.rmtree(item_work_path)
                         except Exception:
-                            pass  # Ignore errors during cleanup
-                    continue  # Next item
+                            pass
+                    continue
 
-                # Check Labeling Needed... (same logic as before)
                 needs_labeling = False
                 eligible_speakers = []
                 if enable_labeling and is_youtube_url and segments:
@@ -640,7 +597,6 @@ class Orchestrator:
                         f"{item_log_prefix} Labeling enabled, but not YT URL or no segments."
                     )
 
-                # Finalize Immediately or Defer... (same logic as before)
                 if not needs_labeling:
                     logger.info(f"{item_log_prefix} Finalizing item immediately.")
                     try:
@@ -670,14 +626,11 @@ class Orchestrator:
                             try:
                                 shutil.rmtree(item_work_path)
                             except Exception:
-                                pass  # Ignore errors during cleanup
-
+                                pass
                 logger.info(
                     f"{item_log_prefix} --- Finished item {item_index}/{total_items} ---"
                 )
-            # --- End of Item Loop ---
 
-            # Store labeling order, check overall status... (same as before)
             if labeling_is_required_overall:
                 self.labeling_state[batch_job_id][
                     "items_requiring_labeling_order"
@@ -691,17 +644,15 @@ class Orchestrator:
             if total_processed_or_pending == 0 and failed_count > 0:
                 raise RuntimeError("No items processed successfully or queued.")
 
-            # Determine final status message & return ID if labeling needed... (same as before)
             if labeling_is_required_overall:
                 batch_status_message = f"{log_prefix} Initial processing complete. {pending_labeling_count} item(s) require labeling."
-                return_batch_id: Optional[str] = batch_job_id
+                return_batch_id = batch_job_id
             else:
                 logger.info(f"{log_prefix} No labeling needed. Creating final ZIP.")
                 permanent_output_dir = Path(self.config.get("output_dir", "./output"))
                 zip_suffix = self.config.get("final_zip_suffix", "_final_bundle.zip")
                 master_zip_name = f"{batch_job_id}_batch_results{zip_suffix}"
                 master_zip_path = permanent_output_dir / master_zip_name
-                # Cast the files dict to match the function signature
                 files_to_add_cast = cast(
                     Dict[str, Union[str, Path]],
                     self.batch_output_files.get(batch_job_id, {}),
@@ -719,7 +670,6 @@ class Orchestrator:
                 return_batch_id = None
             logger.info(f"{log_prefix} Batch Status: {batch_status_message}")
 
-        # Exception Handling... (same general structure as before)
         except (FileNotFoundError, ValueError, ResourceAccessError, InputDataError) as e:
             err_msg = f"{log_prefix} BATCH ERROR: {e}"
             logger.error(err_msg)
@@ -743,7 +693,6 @@ class Orchestrator:
             if batch_job_id in self.labeling_state:
                 del self.labeling_state[batch_job_id]
         finally:
-            # Close log, batch cleanup... (same logic as before)
             should_close_log = (
                 log_file_handle
                 and not log_file_handle.closed
@@ -783,7 +732,6 @@ class Orchestrator:
                         f"{log_prefix} Skipping cleanup of batch temp dir: {batch_work_path}"
                     )
 
-        # Final Summary String... (same as before)
         results_summary_string = (
             f"Batch Summary ({batch_job_id}):\n"
             + f"- Total Items: {total_items}\n"
@@ -797,8 +745,6 @@ class Orchestrator:
 
         return batch_status_message, "\n".join(batch_results_list), return_batch_id
 
-    # --- Internal Helper for Finalizing Items ---
-    # (No changes needed in this method based on the clarification)
     def _finalize_batch_item(
         self,
         batch_job_id: str,
@@ -810,7 +756,6 @@ class Orchestrator:
         item_work_path: Path,
         log_file_handle: Optional[TextIO] = None,
     ) -> Optional[Dict[str, Union[Path, List[Path]]]]:
-        # ... (previous implementation of _finalize_batch_item remains the same) ...
         item_log_prefix = self._get_log_prefix(batch_job_id, item_identifier)
         logger.info(f"{item_log_prefix} Starting finalization...")
         item_output_dir = item_work_path / "output"
@@ -837,7 +782,6 @@ class Orchestrator:
                 logger.error(
                     f"{item_log_prefix} Failed to save final structured transcript."
                 )
-            # Explicitly cast to Dict[str, bool] to help Pylance with the Union type
             output_flags_dict = self.labeling_state.get(batch_job_id, {}).get(
                 "output_flags", {}
             )
@@ -852,20 +796,7 @@ class Orchestrator:
                 logger.info(f"{item_log_prefix} Calculating emotion summary...")
                 summary_data = calculate_emotion_summary(
                     segments=relabeled_segments,
-                    emotion_value_map=self.config.get("emotion_value_map", {  # Used for scoring/volatility calculations [cite: 26]
-                        "joy": 1.0,
-                        "love": 0.8,
-                        "surprise": 0.5,
-                        "neutral": 0.0,
-                        "fear": -1.5,
-                        "sadness": -1.0,
-                        "disgust": -1.8,
-                        "anger": -2.0,
-                        "unknown": 0.0,
-                        "analysis_skipped": 0.0,
-                        "analysis_failed": 0.0,
-                        "no_text": 0.0,
-                    }),
+                    emotion_value_map=self.config.get("emotion_value_map", {}),
                     include_timeline=True,
                     log_prefix=item_log_prefix,
                 )
@@ -905,20 +836,7 @@ class Orchestrator:
                     summary_data=summary_data,
                     output_dir=plot_output_dir,
                     file_prefix=f"{item_identifier}",
-                    emotion_value_map=self.config.get("emotion_value_map", {  # Used for scoring/volatility calculations [cite: 26]
-                        "joy": 1.0,
-                        "love": 0.8,
-                        "surprise": 0.5,
-                        "neutral": 0.0,
-                        "fear": -1.5,
-                        "sadness": -1.0,
-                        "disgust": -1.8,
-                        "anger": -2.0,
-                        "unknown": 0.0,
-                        "analysis_skipped": 0.0,
-                        "analysis_failed": 0.0,
-                        "no_text": 0.0,
-                    }),
+                    emotion_value_map=self.config.get("emotion_value_map", {}),
                     emotion_colors=self.config.get("emotion_colors", {}),
                     log_prefix=item_log_prefix,
                 )
@@ -955,12 +873,9 @@ class Orchestrator:
             )
             return None
 
-    # --- Methods for Interactive Labeling Workflow ---
-    # (No changes needed in these methods based on the clarification)
     def start_labeling_item(
         self, batch_job_id: str, item_identifier: str
     ) -> Optional[Tuple[str, str, List[int]]]:
-        # ... (previous implementation) ...
         log_prefix = self._get_log_prefix(batch_job_id, item_identifier)
         logger.info(f"{log_prefix} UI Request: Start labeling item.")
         item_state = self.labeling_state.get(batch_job_id, {}).get(item_identifier)
@@ -984,7 +899,6 @@ class Orchestrator:
     def store_label(
         self, batch_job_id: str, item_identifier: str, speaker_id: str, user_label: str
     ) -> bool:
-        # ... (previous implementation) ...
         log_prefix = self._get_log_prefix(batch_job_id, item_identifier)
         logger.info(f"{log_prefix} UI Request: Store label {speaker_id} = '{user_label}'.")
         item_state = self.labeling_state.get(batch_job_id, {}).get(item_identifier)
@@ -1001,7 +915,6 @@ class Orchestrator:
     def get_next_labeling_speaker(
         self, batch_job_id: str, item_identifier: str, current_speaker_index: int
     ) -> Optional[Tuple[str, str, List[int]]]:
-        # ... (previous implementation) ...
         log_prefix = self._get_log_prefix(batch_job_id, item_identifier)
         logger.info(
             f"{log_prefix} UI Request: Get next speaker after index {current_speaker_index}."
@@ -1026,7 +939,6 @@ class Orchestrator:
         )
 
     def skip_item_labeling(self, batch_job_id: str, item_identifier: str) -> bool:
-        # ... (previous implementation) ...
         log_prefix = self._get_log_prefix(batch_job_id, item_identifier)
         logger.info(f"{log_prefix} UI Request: Skip remaining speakers.")
         item_state = self.labeling_state.get(batch_job_id, {}).get(item_identifier)
@@ -1043,7 +955,6 @@ class Orchestrator:
             return False
 
     def finalize_item(self, batch_job_id: str, item_identifier: str) -> bool:
-        # ... (previous implementation) ...
         item_log_prefix = self._get_log_prefix(batch_job_id, item_identifier)
         logger.info(f"{item_log_prefix} Orchestrator finalizing item...")
         item_state = self.labeling_state.get(batch_job_id, {}).get(item_identifier)
@@ -1051,7 +962,6 @@ class Orchestrator:
             logger.error(f"{item_log_prefix} Cannot finalize - item state invalid.")
             return False
         segments = item_state.get("segments")
-        # Cast retrieved values to help Pylance
         collected_labels = cast(SpeakerLabelMap, item_state.get("collected_labels", {}))
         metadata = cast(Dict[str, Any], item_state.get("metadata", {}))
         audio_path = item_state.get("audio_path")
@@ -1060,7 +970,6 @@ class Orchestrator:
             logger.error(f"{item_log_prefix} Cannot finalize - missing data in state.")
             self._remove_item_state(batch_job_id, item_identifier)
             return False
-        # Cast non-None values after check
         segments = cast(SegmentsList, segments)
         audio_path = cast(Path, audio_path)
         item_work_path = cast(Path, item_work_path)
@@ -1092,11 +1001,10 @@ class Orchestrator:
         finally:
             if log_handle and not log_handle.closed:
                 log_handle.close()
-            self._remove_item_state(batch_job_id, item_identifier)  # Clean up state
+            self._remove_item_state(batch_job_id, item_identifier)
         return finalization_success
 
     def check_completion_and_zip(self, batch_job_id: str) -> Optional[Path]:
-        # ... (previous implementation) ...
         log_prefix = self._get_log_prefix(batch_job_id)
         logger.info(f"{log_prefix} UI Request: Check batch completion and ZIP.")
         batch_state = self.labeling_state.get(batch_job_id)
@@ -1120,11 +1028,9 @@ class Orchestrator:
         log_handle = None
         zip_path: Optional[Path] = None
         try:
-            # Cast the files dict to match the function signature
             files_for_zip_cast = cast(Dict[str, Union[str, Path]], files_for_zip)
             if log_file_path.exists():
                 log_handle = open(log_file_path, "a", encoding="utf-8")
-                # Ensure the added log file path also fits the cast type
                 files_for_zip_cast[log_file_path.name] = log_file_path
             zip_path = create_zip_archive(
                 zip_path=master_zip_path,
@@ -1160,7 +1066,6 @@ class Orchestrator:
         return zip_path
 
     def _remove_item_state(self, batch_job_id: str, item_identifier: str):
-        # ...existing code...
         log_prefix = self._get_log_prefix(batch_job_id, item_identifier)
         if batch_job_id in self.labeling_state:
             batch_state = self.labeling_state[batch_job_id]
