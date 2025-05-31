@@ -147,7 +147,8 @@ def run_riva_asr(
     riva_server_uri: str = "localhost:50051",
     language_code: str = "en-US",
     max_speakers_diarization: Optional[int] = None,
-    enable_automatic_punctuation: bool = True, # Added new parameter
+    enable_automatic_punctuation: bool = True,
+    riva_request_timeout: Optional[float] = None, # Added timeout parameter
     # Output discovery compatibility
     output_filename_exclusions: Optional[List[str]] = None,
     # Logging
@@ -179,6 +180,20 @@ def run_riva_asr(
         with audio_path.open('rb') as fh:
             data = fh.read()
 
+        # Check audio file size and log a warning if it's very large
+        audio_file_size_bytes = len(data)
+        audio_file_size_mb = audio_file_size_bytes / (1024 * 1024)
+        # Define a threshold, e.g., 100 MB (approx. >50 mins of 16kHz/16bit mono audio)
+        # 1 min of 16kHz, 16-bit mono audio is: 16000 samples/sec * 2 bytes/sample * 60 sec/min = 1,920,000 bytes/min ~= 1.83 MB/min
+        # So, 100MB is roughly 100 / 1.83 ~= 54 minutes.
+        size_threshold_mb = 100
+        if audio_file_size_mb > size_threshold_mb:
+            logger.warning(
+                f"{log_prefix} Input audio file {audio_path.name} is large ({audio_file_size_mb:.2f} MB). "
+                f"Processing may take a significant time and could be susceptible to client/server timeouts. "
+                f"Consider checking Riva server's max audio duration limits and client timeout (currently set to {riva_request_timeout}s if > 0, or server default otherwise)."
+            )
+
         config = riva.client.RecognitionConfig(
             language_code=language_code, # Use passed-in language_code
             max_alternatives=1,
@@ -196,7 +211,14 @@ def run_riva_asr(
 
         logger.info(f"{log_prefix} Recognition config prepared. Language: {language_code}")
         logger.info(f"{log_prefix} Sending ASR request to Riva server for {audio_path.name}…")
-        response: rasr.RecognizeResponse = asr_service.offline_recognize(data, config)
+
+        if riva_request_timeout is not None and riva_request_timeout > 0:
+            logger.info(f"{log_prefix} Using request timeout of {riva_request_timeout} seconds.")
+            response: rasr.RecognizeResponse = asr_service.offline_recognize(
+                data, config, timeout=riva_request_timeout
+            )
+        else:
+            response: rasr.RecognizeResponse = asr_service.offline_recognize(data, config)
 
         if not response.results:
             logger.warning(f"{log_prefix} Received empty ASR results for {audio_path.name}.")
@@ -208,8 +230,7 @@ def run_riva_asr(
             # and including default values (e.g. 0 for speaker_tag if not set by server)
             response_dict = json_format.MessageToDict(
                 response,
-                preserving_proto_field_name=True,
-                including_default_value_fields=True
+                preserving_proto_field_name=True
             )
             logger.debug(f"{log_prefix} Raw Riva response (dict): {str(response_dict)[:500]}...") # Log snippet of raw dict
 

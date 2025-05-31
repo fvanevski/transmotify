@@ -447,6 +447,7 @@ class Orchestrator:
                         language_code=self.config.get("riva_asr_language_code", "en-US"),
                         max_speakers_diarization=self.config.get("riva_max_speakers_diarization", 2),
                         enable_automatic_punctuation=self.config.get("riva_enable_automatic_punctuation", True),
+                        riva_request_timeout=self.config.get("riva_request_timeout_seconds", 120), # Added timeout
                         # device parameter removed as it's not directly used by Riva client call
                         output_filename_exclusions=[
                             name for name in excluded_asr_outputs if name
