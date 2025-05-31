@@ -54,7 +54,7 @@ class Config:
             "riva_asr_language_code": "en-US",
             "riva_max_speakers_diarization": 5, # Default max speakers for Riva diarization (None to disable explicit setting)
             "riva_enable_automatic_punctuation": True,
-            "riva_request_timeout_seconds": 120, # Client-side timeout for Riva ASR requests
+            "riva_request_timeout_seconds": 240, # Client-side timeout for Riva ASR requests
             # --- Processing Parameters ---
             "min_diarization_duration": 5.0,  # Minimum audio duration for diarization attempt (may still be relevant for deciding to call ASR with diarization)
             "visual_frame_rate": 1,  # Frames per second for visual analysis
