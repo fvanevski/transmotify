@@ -177,7 +177,7 @@ def run_riva_asr(
         config = riva.client.RecognitionConfig(
             language_code=language_code,
             max_alternatives=1,
-            enable_automatic_punctuation=enable_automatic_punctuation,
+            enable_automatic_punctuation=True,
             enable_word_time_offsets=True,
             # encoding and sample_rate_hertz are typically set by the Riva server or defaults,
             # but can be specified if known and fixed, e.g., AudioEncoding.LINEAR_PCM and 16000 Hz
@@ -196,8 +196,10 @@ def run_riva_asr(
         logger.info(f"{log_prefix} Sending ASR request to Riva server for {audio_path.name}…")
 
         # Construct the RecognizeRequest protobuf message
-        request = rasr.RecognizeRequest(audio=data, config=config)
+        #request = rasr.RecognizeRequest(audio=data, config=config)
+        response = asr_service.offline_recognize(data, config)
 
+        """
         actual_timeout_for_call = None
         if riva_request_timeout is not None and riva_request_timeout > 0:
             logger.info(f"{log_prefix} Using request timeout of {riva_request_timeout} seconds for gRPC call.")
@@ -211,6 +213,7 @@ def run_riva_asr(
             metadata=auth.get_auth_metadata(), # Get authentication metadata
             timeout=actual_timeout_for_call    # Pass the timeout in seconds
         )
+        """
 
         if not response.results:
             logger.warning(f"{log_prefix} Received empty ASR results for {audio_path.name}.")
